@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any, cast
 
 from infrapilot_workflow import ProjectState, WorkflowInput, build_execution_plan
@@ -59,6 +60,7 @@ def _plan_to_tool_output(plan: Any) -> dict[str, Any]:
         "steps": steps,
         "status": "success",
         "error": None,
+        "missing_parameters": [],
     }
 
 
@@ -108,10 +110,58 @@ def _run_workflow_intent(
         return _plan_to_tool_output(build_execution_plan(workflow_input))
     except ValueError as exc:
         return _validation_error_output(intent=intent, error=exc)
+    except Exception:
+        return _internal_error_output(intent=intent)
+
+
+def _dedupe_strings(values: Iterable[str]) -> list[str]:
+    """Preserve order while removing duplicate parameter names."""
+    seen: set[str] = set()
+    deduped: list[str] = []
+
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+
+    return deduped
+
+
+def _extract_missing_parameters(message: str) -> list[str]:
+    """Extract likely missing user inputs from workflow-core validation text."""
+    missing: list[str] = []
+
+    if "entities['service_name']" in message:
+        missing.append("service_name")
+    if "entities['replicas']" in message:
+        missing.append("replicas")
+    if "project_state.infrastructure keys:" in message:
+        missing.append("infrastructure")
+    if "project_state.services['" in message:
+        missing.append("services")
+
+    return _dedupe_strings(missing)
 
 
 def _validation_error_output(*, intent: str, error: ValueError) -> dict[str, Any]:
-    """Return a structured tool error instead of propagating validation failures."""
+    """Return a structured tool response for expected validation failures."""
+    message = str(error)
+    return {
+        "intent": intent,
+        "files": [],
+        "commands": [],
+        "notes": [],
+        "requires_confirmation": False,
+        "steps": [],
+        "status": "needs_input",
+        "error": message,
+        "missing_parameters": _extract_missing_parameters(message),
+    }
+
+
+def _internal_error_output(*, intent: str) -> dict[str, Any]:
+    """Return a structured tool response for unexpected planning failures."""
     return {
         "intent": intent,
         "files": [],
@@ -120,7 +170,8 @@ def _validation_error_output(*, intent: str, error: ValueError) -> dict[str, Any
         "requires_confirmation": False,
         "steps": [],
         "status": "error",
-        "error": str(error),
+        "error": "Internal workflow planning failure.",
+        "missing_parameters": [],
     }
 
 

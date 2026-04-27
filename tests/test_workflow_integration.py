@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest.mock import patch
 
 from langchain_core.messages import AIMessage, ToolMessage
 
@@ -93,11 +94,12 @@ class WorkflowAdapterToolTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual("error", result["status"])
+        self.assertEqual("needs_input", result["status"])
         self.assertEqual("deploy_service", result["intent"])
         self.assertEqual([], result["files"])
         self.assertEqual([], result["steps"])
         self.assertIn("project_state.infrastructure keys", result["error"])
+        self.assertEqual(["infrastructure"], result["missing_parameters"])
 
     def test_plan_scale_service_returns_structured_plan(self) -> None:
         result = plan_scale_service.invoke(
@@ -166,9 +168,21 @@ class WorkflowAdapterToolTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual("error", result["status"])
+        self.assertEqual("needs_input", result["status"])
         self.assertEqual("stop_service", result["intent"])
         self.assertIn("requires entities['service_name']", result["error"])
+        self.assertEqual(["service_name"], result["missing_parameters"])
+
+    @patch("tools.workflow_tools.build_execution_plan", side_effect=RuntimeError("boom"))
+    def test_internal_planning_failure_returns_generic_error(self, _mock_plan) -> None:
+        result = plan_setup_infra.invoke({"project_name": "demo-project"})
+
+        self.assertEqual("error", result["status"])
+        self.assertEqual("setup_infra", result["intent"])
+        self.assertEqual([], result["files"])
+        self.assertEqual([], result["steps"])
+        self.assertEqual("Internal workflow planning failure.", result["error"])
+        self.assertEqual([], result["missing_parameters"])
 
 
 class FormatterNodeTests(unittest.TestCase):
@@ -217,11 +231,42 @@ class FormatterNodeTests(unittest.TestCase):
 
         formatted = _formatter_node(state)["final_payload"]
 
-        self.assertEqual("error", formatted["status"])
+        self.assertEqual("needs_input", formatted["status"])
         self.assertEqual("deploy_service", formatted["intent"])
         self.assertEqual([], formatted["files"])
         self.assertEqual([], formatted["steps"])
         self.assertEqual(tool_result["error"], formatted["error"])
+        self.assertEqual(["infrastructure"], formatted["missing_parameters"])
+
+    def test_formatter_preserves_internal_error_status(self) -> None:
+        tool_result = {
+            "status": "error",
+            "intent": "deploy_service",
+            "files": [],
+            "commands": [],
+            "notes": [],
+            "requires_confirmation": False,
+            "steps": [],
+            "error": "Internal workflow planning failure.",
+            "missing_parameters": [],
+        }
+        state = {
+            "messages": [
+                ToolMessage(
+                    content=json.dumps(tool_result),
+                    tool_call_id="tool-3",
+                    name="plan_deploy_service",
+                ),
+                AIMessage(content="Planning failed internally."),
+            ]
+        }
+
+        formatted = _formatter_node(state)["final_payload"]
+
+        self.assertEqual("error", formatted["status"])
+        self.assertEqual("deploy_service", formatted["intent"])
+        self.assertEqual("Internal workflow planning failure.", formatted["error"])
+        self.assertEqual([], formatted["missing_parameters"])
 
 
 if __name__ == "__main__":

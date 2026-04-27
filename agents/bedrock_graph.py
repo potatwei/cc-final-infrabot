@@ -111,10 +111,11 @@ def _formatter_node(state: AgentState) -> dict:
     commands: list[dict] = []
     notes: list[str] = []
     steps: list[dict] = []
+    missing_parameters: list[str] = []
     intent: str | None = None
     requires_confirmation = False
     error: str | None = None
-    saw_structured_error = False
+    final_status = "success"
 
     for msg in state["messages"]:
         if not isinstance(msg, ToolMessage):
@@ -136,6 +137,10 @@ def _formatter_node(state: AgentState) -> dict:
             notes.extend(str(note) for note in content["notes"])
         if "steps" in content and isinstance(content["steps"], list):
             steps.extend(step for step in content["steps"] if isinstance(step, dict))
+        if "missing_parameters" in content and isinstance(content["missing_parameters"], list):
+            missing_parameters.extend(
+                str(item) for item in content["missing_parameters"] if isinstance(item, str)
+            )
         if "intent" in content and isinstance(content["intent"], str):
             intent = content["intent"]
         if "requires_confirmation" in content:
@@ -143,7 +148,9 @@ def _formatter_node(state: AgentState) -> dict:
                 requires_confirmation or bool(content["requires_confirmation"])
             )
         if content.get("status") == "error":
-            saw_structured_error = True
+            final_status = "error"
+        elif content.get("status") == "needs_input" and final_status != "error":
+            final_status = "needs_input"
         if "error" in content and isinstance(content["error"], str):
             error = content["error"]
 
@@ -158,10 +165,11 @@ def _formatter_node(state: AgentState) -> dict:
                 for part in last_ai.content
             ).strip()
 
+    if final_status == "success" and not (files or commands or steps or intent):
+        final_status = "error"
+
     final_payload = {
-        "status": "error"
-        if saw_structured_error
-        else ("success" if (files or commands or steps or intent) else "error"),
+        "status": final_status,
         "task_id": str(uuid.uuid4()),
         "intent": intent,
         "files": files,
@@ -170,6 +178,7 @@ def _formatter_node(state: AgentState) -> dict:
         "requires_confirmation": requires_confirmation,
         "steps": steps,
         "error": error,
+        "missing_parameters": list(dict.fromkeys(missing_parameters)),
         "explanation": explanation or "InfraPilot finished processing your request.",
     }
     return {"final_payload": final_payload}
