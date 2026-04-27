@@ -21,3 +21,9 @@ rad.json
 #Test results file
 TestResults.xml
 .DS*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv*/

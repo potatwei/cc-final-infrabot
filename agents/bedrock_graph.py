@@ -109,7 +109,12 @@ def _formatter_node(state: AgentState) -> dict:
     """Collapse the conversation into the strict FinalResponse payload."""
     files: list[dict] = []
     commands: list[dict] = []
+    notes: list[str] = []
+    steps: list[dict] = []
     intent: str | None = None
+    requires_confirmation = False
+    error: str | None = None
+    saw_structured_error = False
 
     for msg in state["messages"]:
         if not isinstance(msg, ToolMessage):
@@ -127,8 +132,20 @@ def _formatter_node(state: AgentState) -> dict:
             files.extend(content["files"])
         if "commands" in content and isinstance(content["commands"], list):
             commands.extend(content["commands"])
+        if "notes" in content and isinstance(content["notes"], list):
+            notes.extend(str(note) for note in content["notes"])
+        if "steps" in content and isinstance(content["steps"], list):
+            steps.extend(step for step in content["steps"] if isinstance(step, dict))
         if "intent" in content and isinstance(content["intent"], str):
             intent = content["intent"]
+        if "requires_confirmation" in content:
+            requires_confirmation = (
+                requires_confirmation or bool(content["requires_confirmation"])
+            )
+        if content.get("status") == "error":
+            saw_structured_error = True
+        if "error" in content and isinstance(content["error"], str):
+            error = content["error"]
 
     last_ai = state["messages"][-1]
     explanation = ""
@@ -142,11 +159,17 @@ def _formatter_node(state: AgentState) -> dict:
             ).strip()
 
     final_payload = {
-        "status": "success" if (files or commands) else "error",
+        "status": "error"
+        if saw_structured_error
+        else ("success" if (files or commands or steps or intent) else "error"),
         "task_id": str(uuid.uuid4()),
         "intent": intent,
         "files": files,
         "commands": commands,
+        "notes": notes,
+        "requires_confirmation": requires_confirmation,
+        "steps": steps,
+        "error": error,
         "explanation": explanation or "InfraPilot finished processing your request.",
     }
     return {"final_payload": final_payload}
