@@ -47,6 +47,31 @@ def _flatten_generated_files(steps: list[dict[str, Any]]) -> list[dict[str, str]
     return files
 
 
+def _extract_commands(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Mirror workflow-core shell steps into top-level agent command entries."""
+    commands: list[dict[str, Any]] = []
+
+    for step in steps:
+        if step.get("type") != "shell_command":
+            continue
+
+        execution_payload = step.get("execution_payload")
+        if not isinstance(execution_payload, dict):
+            continue
+
+        command_entry: dict[str, Any] = {
+            "step_name": str(step["name"]),
+            "description": str(step["description"]),
+            "command": execution_payload.get("command"),
+        }
+        if "stdin_source" in execution_payload:
+            command_entry["stdin_source"] = execution_payload.get("stdin_source")
+
+        commands.append(command_entry)
+
+    return commands
+
+
 def _plan_to_tool_output(plan: Any) -> dict[str, Any]:
     """Convert the workflow-core plan model into agent-facing output."""
     steps = [step.model_dump(mode="python") for step in plan.steps]
@@ -54,7 +79,7 @@ def _plan_to_tool_output(plan: Any) -> dict[str, Any]:
     return {
         "intent": plan.intent,
         "files": _flatten_generated_files(steps),
-        "commands": [],
+        "commands": _extract_commands(steps),
         "notes": list(plan.notes),
         "requires_confirmation": bool(plan.requires_confirmation),
         "steps": steps,
@@ -216,7 +241,9 @@ def plan_deploy_service(
     """Build a deterministic deploy_service plan via the workflow-core package.
 
     Expected infrastructure keys include cluster, networking, ALB listener, ECS
-    task security group, and ECR metadata already known to the agent layer.
+    task security group, task execution role, and ECR metadata already known to
+    the agent layer. Workflow-core still plans one intent at a time, so shared
+    infrastructure must already exist before deploy_service can succeed.
     """
     entities: dict[str, object] = {
         "region": region,
@@ -252,7 +279,8 @@ def plan_scale_service(
     """Build a deterministic scale_service plan via the workflow-core package.
 
     Use this when service infrastructure already exists and only the desired
-    replica count should change.
+    replica count should change. Workflow-core may fall back to
+    project_name for service_name when the upstream request omits it.
     """
     entities: dict[str, object] = {
         "region": region,
@@ -282,7 +310,8 @@ def plan_stop_service(
     """Build a deterministic stop_service plan via the workflow-core package.
 
     Use this when a service should remain defined in Terraform but be scaled
-    down to zero running tasks.
+    down to zero running tasks. workflow-core requires an explicit
+    service_name for this operational intent.
     """
     return _run_workflow_intent(
         intent="stop_service",
@@ -308,7 +337,8 @@ def plan_teardown_service(
     """Build a deterministic teardown_service plan via the workflow-core package.
 
     Use this when a single service should be destroyed while shared platform
-    infrastructure remains in place.
+    infrastructure remains in place. workflow-core requires an explicit
+    service_name for this destroy intent.
     """
     return _run_workflow_intent(
         intent="teardown_service",
@@ -335,6 +365,8 @@ def plan_teardown_infra(
 
     Use this when the shared ECS/Fargate platform should be destroyed. The
     tool generates Terraform destroy input only; it does not execute anything.
+    workflow-core requires project_state.services to be empty before this plan
+    can succeed.
     """
     return _run_workflow_intent(
         intent="teardown_infra",

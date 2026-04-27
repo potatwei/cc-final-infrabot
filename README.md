@@ -34,13 +34,13 @@ from infrapilot_workflow import (
 
 ## Available Workflow Tools
 
-All workflow tools live in [tools/workflow_tools.py](</Users/maxtai/Cloud Computing/cc-final-infrabot/tools/workflow_tools.py>)
-and are registered through [tools/__init__.py](</Users/maxtai/Cloud Computing/cc-final-infrabot/tools/__init__.py>).
+All workflow tools live in [tools/workflow_tools.py](<tools/workflow_tools.py>)
+and are registered through [tools/__init__.py](<tools/__init__.py>).
 
 | Tool | Workflow intent | What it plans | Required state |
 | --- | --- | --- | --- |
 | `plan_setup_infra` | `setup_infra` | Shared ECS/Fargate platform creation | `project_name` |
-| `plan_deploy_service` | `deploy_service` | Service deployment + service Terraform | `project_name`, infra metadata |
+| `plan_deploy_service` | `deploy_service` | Service deployment + service Terraform | `project_name`, infra metadata including `ecs_task_execution_role_arn` |
 | `plan_scale_service` | `scale_service` | Replica count change for an existing service | `project_name`, infra metadata, stored service state, `replicas` |
 | `plan_stop_service` | `stop_service` | Scale an existing service down to zero | `project_name`, infra metadata, stored service state, explicit `service_name` |
 | `plan_teardown_service` | `teardown_service` | Destroy one service while leaving shared infra intact | `project_name`, infra metadata, stored service state, explicit `service_name` |
@@ -60,9 +60,12 @@ Each tool returns a machine-readable payload with at least:
 Implementation notes:
 
 - `files` is flattened from workflow-core `step.generated_files`
-- `steps` preserves the original workflow-core plan steps for backend/debug visibility
-- `commands` is currently an empty list because workflow-core does not yet emit executable command payloads
+- `steps` preserves the original workflow-core plan steps for backend/debug visibility, including `execution_payload` on deploy shell steps
+- `commands` mirrors workflow-core `shell_command` steps into a top-level list with `step_name`, `description`, `command`, and optional `stdin_source`
 - `ValueError` from workflow-core validation is converted into structured tool output instead of crashing the agent
+- workflow-core still plans one intent at a time; this repo does not combine `setup_infra` and `deploy_service` into one plan
+- `deploy_service` still requires existing infrastructure state, while `stop_service` and `teardown_service` still require explicit `service_name`
+- `teardown_infra` now requires `project_state.services` to be empty
 
 ## Local Setup
 
@@ -81,6 +84,18 @@ python3.13 -m venv .venv
 .venv/bin/python -m compileall tools agents run_agent.py tests
 ```
 
+For direct workflow smoke checks without Bedrock, point `PYTHONPATH` at the
+local workflow-core checkout and run one of the built-in demos:
+
+```bash
+PYTHONPATH="/Users/maxtai/Cloud Computing/FinalProject/InfraPilot" \
+  .venv/bin/python run_agent.py --demo deploy-success
+PYTHONPATH="/Users/maxtai/Cloud Computing/FinalProject/InfraPilot" \
+  .venv/bin/python run_agent.py --demo deploy-needs-infra
+PYTHONPATH="/Users/maxtai/Cloud Computing/FinalProject/InfraPilot" \
+  .venv/bin/python run_agent.py --demo stop-needs-service-name
+```
+
 ## Design Intent
 
 Do not move planner logic into this repo.
@@ -90,4 +105,4 @@ Add new agent tools here only as thin adapters that:
 1. accept agent-friendly structured arguments
 2. build `ProjectState` and `WorkflowInput`
 3. call `build_execution_plan(...)`
-4. normalize the result into the agent-facing payload shape
+4. normalize the result into the agent-facing payload shape without executing Terraform, Docker, or AWS commands

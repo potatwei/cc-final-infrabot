@@ -67,6 +67,12 @@ General policy:
      supported by the tools you have been given.
   6. After all tool calls finish, respond with a short, natural-language
      summary of what was produced. Do not repeat the raw tool output.
+  7. If a tool returns status `needs_input`, do not treat it as an internal
+     crash. Explain what is missing and what the user should provide next.
+  8. If deploy_service is blocked by missing infrastructure, tell the user
+     that shared infrastructure must be planned or provided first.
+  9. If stop_service or teardown_service is blocked by a missing service_name,
+     ask for the explicit service name instead of guessing.
 """
 
 # SYSTEM_PROMPT = """You are InfraPilot, an AWS infrastructure assistant.
@@ -168,6 +174,14 @@ def _formatter_node(state: AgentState) -> dict:
     if final_status == "success" and not (files or commands or steps or intent):
         final_status = "error"
 
+    if _should_use_fallback_explanation(explanation, final_status):
+        explanation = _build_fallback_explanation(
+            status=final_status,
+            intent=intent,
+            missing_parameters=missing_parameters,
+            error=error,
+        )
+
     final_payload = {
         "status": final_status,
         "task_id": str(uuid.uuid4()),
@@ -182,6 +196,57 @@ def _formatter_node(state: AgentState) -> dict:
         "explanation": explanation or "InfraPilot finished processing your request.",
     }
     return {"final_payload": final_payload}
+
+
+def _should_use_fallback_explanation(explanation: str, status: str) -> bool:
+    """Decide when formatter should replace unhelpful non-success text."""
+    if status == "success":
+        return not explanation
+
+    normalized = explanation.strip().lower()
+    return normalized in {
+        "",
+        "planning failed.",
+        "planning failed internally.",
+        "infrapilot finished processing your request.",
+    }
+
+
+def _build_fallback_explanation(
+    *,
+    status: str,
+    intent: str | None,
+    missing_parameters: list[str],
+    error: str | None,
+) -> str:
+    """Provide deterministic user guidance for structured tool failures."""
+    if status == "needs_input":
+        missing = list(dict.fromkeys(missing_parameters))
+        if intent == "deploy_service" and "infrastructure" in missing:
+            return (
+                "Shared infrastructure is missing for deploy_service. "
+                "Plan setup_infra first, or provide the required infrastructure "
+                "state before retrying deploy_service."
+            )
+        if intent in {"stop_service", "teardown_service"} and "service_name" in missing:
+            return (
+                f"{intent} requires an explicit service_name. "
+                "Provide the target service name and retry the request."
+            )
+        if missing:
+            missing_list = ", ".join(missing)
+            return (
+                f"More input is required before {intent or 'planning'} can continue: "
+                f"{missing_list}."
+            )
+        if error:
+            return error
+        return "More input is required before planning can continue."
+
+    if status == "error":
+        return error or "Internal workflow planning failure."
+
+    return "InfraPilot finished processing your request."
 
 
 # --------------------------------------------------------------------------- #
