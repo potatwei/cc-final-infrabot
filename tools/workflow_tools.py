@@ -163,6 +163,8 @@ def _extract_missing_parameters(message: str) -> list[str]:
         missing.append("replicas")
     if "project_state.infrastructure keys:" in message:
         missing.append("infrastructure")
+    if "non-empty project_state.infrastructure" in message:
+        missing.append("infrastructure")
     if "project_state.services['" in message:
         missing.append("services")
 
@@ -227,7 +229,7 @@ def plan_setup_infra(
 @tool
 def plan_deploy_service(
     project_name: str,
-    infrastructure: dict[str, object],
+    infrastructure: dict[str, object] | None = None,
     region: str = "us-east-1",
     service_name: str | None = None,
     port: int = 3000,
@@ -243,7 +245,9 @@ def plan_deploy_service(
     Expected infrastructure keys include cluster, networking, ALB listener, ECS
     task security group, task execution role, and ECR metadata already known to
     the agent layer. Workflow-core still plans one intent at a time, so shared
-    infrastructure must already exist before deploy_service can succeed.
+    infrastructure must already exist before deploy_service can succeed. If the
+    caller omits infrastructure, this tool returns structured needs_input
+    instead of failing tool-argument validation.
     """
     entities: dict[str, object] = {
         "region": region,
@@ -270,9 +274,9 @@ def plan_deploy_service(
 @tool
 def plan_scale_service(
     project_name: str,
-    infrastructure: dict[str, object],
-    services: dict[str, object],
     replicas: int,
+    infrastructure: dict[str, object] | None = None,
+    services: dict[str, object] | None = None,
     region: str = "us-east-1",
     service_name: str | None = None,
 ) -> dict[str, Any]:
@@ -302,16 +306,17 @@ def plan_scale_service(
 @tool
 def plan_stop_service(
     project_name: str,
-    infrastructure: dict[str, object],
-    services: dict[str, object],
-    service_name: str,
+    infrastructure: dict[str, object] | None = None,
+    services: dict[str, object] | None = None,
+    service_name: str = "",
     region: str = "us-east-1",
 ) -> dict[str, Any]:
     """Build a deterministic stop_service plan via the workflow-core package.
 
     Use this when a service should remain defined in Terraform but be scaled
     down to zero running tasks. workflow-core requires an explicit
-    service_name for this operational intent.
+    service_name for this operational intent. If state is missing, this tool
+    returns structured needs_input instead of failing tool-argument validation.
     """
     return _run_workflow_intent(
         intent="stop_service",
@@ -329,16 +334,17 @@ def plan_stop_service(
 @tool
 def plan_teardown_service(
     project_name: str,
-    infrastructure: dict[str, object],
-    services: dict[str, object],
-    service_name: str,
+    infrastructure: dict[str, object] | None = None,
+    services: dict[str, object] | None = None,
+    service_name: str = "",
     region: str = "us-east-1",
 ) -> dict[str, Any]:
     """Build a deterministic teardown_service plan via the workflow-core package.
 
     Use this when a single service should be destroyed while shared platform
     infrastructure remains in place. workflow-core requires an explicit
-    service_name for this destroy intent.
+    service_name for this destroy intent. If state is missing, this tool
+    returns structured needs_input instead of failing tool-argument validation.
     """
     return _run_workflow_intent(
         intent="teardown_service",

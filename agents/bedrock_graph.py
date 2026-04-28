@@ -18,7 +18,7 @@ import uuid
 from typing import Annotated, TypedDict
 
 from langchain_aws import ChatBedrockConverse
-from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -55,24 +55,31 @@ decide which one to call.
 General policy:
   1. Read the user's request and pick the tools whose descriptions best
      match the requested AWS resources or actions.
-  2. When a tool is available to validate or pre-check something (for
+  2. For workflow-planning tools, prefer calling the relevant tool even if
+     you expect some state or fields may be missing. Let the tool return a
+     structured `needs_input` payload instead of asking on your own.
+  3. When a tool is available to validate or pre-check something (for
      example, name availability, quota, permissions), prefer running it
      BEFORE any tool that generates or mutates artifacts.
-  3. If a pre-check indicates the request cannot proceed, stop, do not
+  4. If a pre-check indicates the request cannot proceed, stop, do not
      call generation tools, and explain the blocker to the user.
-  4. Otherwise, call the appropriate generation tool(s) to produce
+  5. Otherwise, call the appropriate generation tool(s) to produce
      Terraform files and CLI commands. You may chain multiple tools when
      a request spans several resources.
-  5. Do not invent tools, arguments, or AWS resources that are not
+  6. Do not invent tools, arguments, or AWS resources that are not
      supported by the tools you have been given.
-  6. After all tool calls finish, respond with a short, natural-language
+  7. After all tool calls finish, respond with a short, natural-language
      summary of what was produced. Do not repeat the raw tool output.
-  7. If a tool returns status `needs_input`, do not treat it as an internal
+  8. If a tool returns status `needs_input`, do not treat it as an internal
      crash. Explain what is missing and what the user should provide next.
-  8. If deploy_service is blocked by missing infrastructure, tell the user
+  9. If deploy_service is blocked by missing infrastructure, tell the user
      that shared infrastructure must be planned or provided first.
-  9. If stop_service or teardown_service is blocked by a missing service_name,
+  10. If stop_service or teardown_service is blocked by a missing service_name,
      ask for the explicit service name instead of guessing.
+  11. Do not call setup_infra in response to a deploy request unless the user
+      explicitly asked to set up infrastructure as a separate task.
+  12. Never fabricate infrastructure or service state from Terraform code,
+      Terraform output labels, or placeholder strings such as `output_vpc_id`.
 """
 
 # SYSTEM_PROMPT = """You are InfraPilot, an AWS infrastructure assistant.
@@ -113,6 +120,8 @@ def _agent_node(state: AgentState) -> dict:
 
 def _formatter_node(state: AgentState) -> dict:
     """Collapse the conversation into the strict FinalResponse payload."""
+    blocking_deploy_needs_infra = False
+    blocking_deploy_error: str | None = None
     files: list[dict] = []
     commands: list[dict] = []
     notes: list[str] = []
@@ -134,6 +143,12 @@ def _formatter_node(state: AgentState) -> dict:
                 continue
         if not isinstance(content, dict):
             continue
+
+        if _is_blocking_deploy_needs_infrastructure(content):
+            blocking_deploy_needs_infra = True
+            blocking_deploy_error = (
+                str(content["error"]) if isinstance(content.get("error"), str) else None
+            )
 
         if "files" in content and isinstance(content["files"], list):
             files.extend(content["files"])
@@ -162,7 +177,7 @@ def _formatter_node(state: AgentState) -> dict:
 
     last_ai = state["messages"][-1]
     explanation = ""
-    if hasattr(last_ai, "content"):
+    if isinstance(last_ai, AIMessage):
         if isinstance(last_ai.content, str):
             explanation = last_ai.content
         elif isinstance(last_ai.content, list):
@@ -174,7 +189,18 @@ def _formatter_node(state: AgentState) -> dict:
     if final_status == "success" and not (files or commands or steps or intent):
         final_status = "error"
 
-    if _should_use_fallback_explanation(explanation, final_status):
+    if blocking_deploy_needs_infra:
+        final_status = "needs_input"
+        intent = "deploy_service"
+        files = []
+        commands = []
+        notes = []
+        steps = []
+        requires_confirmation = False
+        error = blocking_deploy_error or error
+        missing_parameters = ["infrastructure"]
+
+    if blocking_deploy_needs_infra or _should_use_fallback_explanation(explanation, final_status):
         explanation = _build_fallback_explanation(
             status=final_status,
             intent=intent,
@@ -210,6 +236,26 @@ def _should_use_fallback_explanation(explanation: str, status: str) -> bool:
         "planning failed internally.",
         "infrapilot finished processing your request.",
     }
+
+
+def _is_blocking_deploy_needs_infrastructure(content: dict) -> bool:
+    """Detect a deploy failure caused by missing infrastructure state."""
+    if content.get("intent") != "deploy_service":
+        return False
+    if content.get("status") != "needs_input":
+        return False
+
+    missing_parameters = content.get("missing_parameters")
+    if isinstance(missing_parameters, list) and "infrastructure" in missing_parameters:
+        return True
+
+    error = content.get("error")
+    if not isinstance(error, str):
+        return False
+    return (
+        "project_state.infrastructure keys:" in error
+        or "non-empty project_state.infrastructure" in error
+    )
 
 
 def _build_fallback_explanation(
@@ -263,6 +309,26 @@ def _route_after_agent(state: AgentState) -> str:
     return "formatter"
 
 
+def _route_after_action(state: AgentState) -> str:
+    """Stop the loop after structured tool failures; otherwise continue reasoning."""
+    last = state["messages"][-1]
+    if not isinstance(last, ToolMessage):
+        return "agent"
+
+    content = last.content
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except json.JSONDecodeError:
+            return "agent"
+    if not isinstance(content, dict):
+        return "agent"
+
+    if content.get("status") in {"needs_input", "error"}:
+        return "formatter"
+    return "agent"
+
+
 # --------------------------------------------------------------------------- #
 # Graph builder
 # --------------------------------------------------------------------------- #
@@ -281,7 +347,11 @@ def build_graph():
         _route_after_agent,
         {"action": "action", "formatter": "formatter"},
     )
-    workflow.add_edge("action", "agent")
+    workflow.add_conditional_edges(
+        "action",
+        _route_after_action,
+        {"agent": "agent", "formatter": "formatter"},
+    )
     workflow.add_edge("formatter", END)
 
     return workflow.compile()

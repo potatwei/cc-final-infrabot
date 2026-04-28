@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage, ToolMessage
 
-from agents.bedrock_graph import _formatter_node
+from agents.bedrock_graph import _formatter_node, _route_after_action
 from run_agent import demo_workflow_payload
 from tools.workflow_tools import (
     plan_deploy_service,
@@ -123,6 +123,13 @@ class WorkflowAdapterToolTests(unittest.TestCase):
         self.assertIn("project_state.infrastructure keys", result["error"])
         self.assertEqual(["infrastructure"], result["missing_parameters"])
 
+    def test_plan_deploy_service_without_infrastructure_returns_needs_input(self) -> None:
+        result = plan_deploy_service.invoke({"project_name": "demo-project"})
+
+        self.assertEqual("needs_input", result["status"])
+        self.assertEqual("deploy_service", result["intent"])
+        self.assertEqual(["infrastructure"], result["missing_parameters"])
+
     def test_plan_scale_service_returns_structured_plan(self) -> None:
         result = plan_scale_service.invoke(
             {
@@ -197,6 +204,30 @@ class WorkflowAdapterToolTests(unittest.TestCase):
         self.assertEqual("stop_service", result["intent"])
         self.assertIn("requires entities['service_name']", result["error"])
         self.assertEqual(["service_name"], result["missing_parameters"])
+
+    def test_plan_stop_service_without_state_returns_structured_needs_input(self) -> None:
+        result = plan_stop_service.invoke(
+            {
+                "project_name": "demo-project",
+                "service_name": "api",
+            }
+        )
+
+        self.assertEqual("needs_input", result["status"])
+        self.assertEqual("stop_service", result["intent"])
+        self.assertEqual(["infrastructure", "services"], result["missing_parameters"])
+
+    def test_plan_teardown_service_without_state_returns_structured_needs_input(self) -> None:
+        result = plan_teardown_service.invoke(
+            {
+                "project_name": "demo-project",
+                "service_name": "api",
+            }
+        )
+
+        self.assertEqual("needs_input", result["status"])
+        self.assertEqual("teardown_service", result["intent"])
+        self.assertIn("project_state.infrastructure", result["error"])
 
     @patch("tools.workflow_tools.build_execution_plan", side_effect=RuntimeError("boom"))
     def test_internal_planning_failure_returns_generic_error(self, _mock_plan) -> None:
@@ -353,6 +384,69 @@ class FormatterNodeTests(unittest.TestCase):
         self.assertEqual("needs_input", formatted["status"])
         self.assertEqual(["service_name"], formatted["missing_parameters"])
         self.assertIn("explicit service_name", formatted["explanation"])
+
+    def test_formatter_discards_mixed_artifacts_after_blocking_deploy_failure(self) -> None:
+        blocking_tool_result = {
+            "status": "needs_input",
+            "intent": "deploy_service",
+            "files": [],
+            "commands": [],
+            "notes": [],
+            "requires_confirmation": False,
+            "steps": [],
+            "error": "intent 'deploy_service' requires non-empty project_state.infrastructure",
+            "missing_parameters": [],
+        }
+        misleading_tool_result = {
+            "status": "success",
+            "intent": "deploy_service",
+            "files": [{"path": "service/demo/main.tf", "content": "fake", "source_step": "x"}],
+            "commands": [{"step_name": "build_container_image", "command": {"binary": "docker"}}],
+            "notes": ["fake success"],
+            "requires_confirmation": True,
+            "steps": [{"name": "apply_service_infrastructure"}],
+            "error": None,
+            "missing_parameters": [],
+        }
+        state = {
+            "messages": [
+                ToolMessage(
+                    content=json.dumps(blocking_tool_result),
+                    tool_call_id="tool-5",
+                    name="plan_deploy_service",
+                ),
+                ToolMessage(
+                    content=json.dumps(misleading_tool_result),
+                    tool_call_id="tool-6",
+                    name="plan_deploy_service",
+                ),
+                AIMessage(content="Deployment plan succeeded."),
+            ]
+        }
+
+        formatted = _formatter_node(state)["final_payload"]
+
+        self.assertEqual("needs_input", formatted["status"])
+        self.assertEqual("deploy_service", formatted["intent"])
+        self.assertEqual([], formatted["files"])
+        self.assertEqual([], formatted["commands"])
+        self.assertEqual([], formatted["steps"])
+        self.assertEqual(["infrastructure"], formatted["missing_parameters"])
+        self.assertIn("setup_infra first", formatted["explanation"])
+
+    def test_route_after_action_stops_on_structured_needs_input(self) -> None:
+        tool_result = plan_deploy_service.invoke({"project_name": "demo-project"})
+        state = {
+            "messages": [
+                ToolMessage(
+                    content=json.dumps(tool_result),
+                    tool_call_id="tool-7",
+                    name="plan_deploy_service",
+                )
+            ]
+        }
+
+        self.assertEqual("formatter", _route_after_action(state))
 
 
 class RunAgentDemoTests(unittest.TestCase):
