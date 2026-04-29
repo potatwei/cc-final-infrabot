@@ -120,7 +120,10 @@ def _format_message(msg) -> str:
 
 def run(query: str) -> dict | None:
     graph = build_graph()
-    inputs = {"messages": [HumanMessage(content=f"User request: {query}")]}
+    inputs = {
+        "messages": [HumanMessage(content=f"User request: {query}")],
+        "task_id": "local-preview",
+    }
 
     print("=" * 72)
     print(f"USER QUERY: {query}")

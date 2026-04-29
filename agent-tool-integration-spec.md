@@ -45,7 +45,8 @@ FastAPI backend.
 
 The repo also retains an advanced ECS/Fargate workflow family backed by
 `infrapilot-workflow-core`, but these tools are intentionally isolated from the
-default agent registry:
+default agent registry in
+[tools/advanced_workflow_registry.py](<tools/advanced_workflow_registry.py>):
 
 - `setup_infra`
 - `deploy_service`
@@ -111,7 +112,8 @@ Input:
 
 ```json
 {
-  "bucket_name": "demo-bucket"
+  "bucket_name": "demo-bucket",
+  "region": "us-east-1"
 }
 ```
 
@@ -295,7 +297,7 @@ The agent returns this shape:
 ```json
 {
   "status": "success | needs_input | error",
-  "task_id": "uuid",
+  "task_id": "backend-or-caller-provided-id",
   "intent": "setup_infra | deploy_service | scale_service | stop_service | teardown_service | teardown_infra",
   "files": [],
   "commands": [],
@@ -313,6 +315,13 @@ The agent returns this shape:
 - `success`: planning completed
 - `needs_input`: caller must provide more state or user input
 - `error`: internal planning/orchestration failure
+
+### `task_id`
+
+- the backend or other caller should inject the canonical task ID into graph
+  state before invoking the agent
+- the agent returns that same ID in the final payload and does not mint a new
+  UUID on its own
 
 ### `files`
 

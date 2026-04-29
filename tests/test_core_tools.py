@@ -7,7 +7,8 @@ from unittest.mock import MagicMock, patch
 
 from botocore.exceptions import ClientError
 
-from tools import ADVANCED_WORKFLOW_TOOLS, INFRAPILOT_TOOLS
+from tools import INFRAPILOT_TOOLS
+from tools.advanced_workflow_registry import ADVANCED_WORKFLOW_TOOLS
 from tools.ec2_tools import generate_ec2_terraform
 from tools.s3_tools import check_s3_name_availability, generate_s3_terraform
 from tools.vpc_tools import generate_vpc_terraform
@@ -32,12 +33,15 @@ class CoreToolRegistryTests(unittest.TestCase):
 
 class S3ToolTests(unittest.TestCase):
     def test_generate_s3_terraform_returns_agent_payload(self) -> None:
-        result = generate_s3_terraform.invoke({"bucket_name": "demo-bucket"})
+        result = generate_s3_terraform.invoke(
+            {"bucket_name": "demo-bucket", "region": "us-west-2"}
+        )
 
         self.assertEqual("success", result["status"])
         self.assertEqual("deploy_s3_bucket", result["intent"])
         self.assertEqual("main.tf", result["files"][0]["path"])
         self.assertEqual("terraform", result["files"][0]["type"])
+        self.assertIn('region = "us-west-2"', result["files"][0]["content"])
         self.assertEqual("terraform", result["commands"][0]["command"]["binary"])
         self.assertTrue(result["requires_confirmation"])
 
@@ -76,6 +80,7 @@ class EC2ToolTests(unittest.TestCase):
         self.assertEqual("deploy_ec2_instance", result["intent"])
         self.assertEqual("main.tf", result["files"][0]["path"])
         self.assertIn('instance_type = "t3.micro"', result["files"][0]["content"])
+        self.assertIn('resource "aws_vpc" "main"', result["files"][0]["content"])
         self.assertEqual("terraform", result["commands"][1]["command"]["binary"])
         self.assertTrue(result["requires_confirmation"])
 

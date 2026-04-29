@@ -14,8 +14,7 @@ The graph implements a classic ReAct loop:
 from __future__ import annotations
 
 import json
-import uuid
-from typing import Annotated, TypedDict
+from typing import Annotated, NotRequired, TypedDict
 
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
@@ -38,6 +37,7 @@ class AgentState(TypedDict):
 
     messages: Annotated[list[BaseMessage], add_messages]
     final_payload: dict
+    task_id: NotRequired[str]
 
 
 # --------------------------------------------------------------------------- #
@@ -201,7 +201,7 @@ def _formatter_node(state: AgentState) -> dict:
 
     final_payload = {
         "status": final_status,
-        "task_id": str(uuid.uuid4()),
+        "task_id": state.get("task_id", ""),
         "intent": intent,
         "files": files,
         "commands": commands,

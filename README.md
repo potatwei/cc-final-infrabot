@@ -5,7 +5,6 @@ agent orchestration, and agent-facing output shaping.
 
 The current default agent surface is intentionally small:
 
-- core resource tools for one-shot AWS planning (`S3`, `EC2`)
 - core resource tools for one-shot AWS planning (`S3`, `EC2`, `VPC`)
 - advanced ECS/Fargate workflow tools kept in-repo but isolated from the
   default agent registry until the broader workflow story is ready
@@ -20,7 +19,8 @@ Default agent tools:
 - `generate_vpc_terraform`
 
 Advanced workflow tools currently remain available in code but are not
-registered in the default agent tool list:
+registered in the default agent tool list. They are exposed separately through
+[tools/advanced_workflow_registry.py](<tools/advanced_workflow_registry.py>):
 
 - `plan_setup_infra`
 - `plan_deploy_service`
@@ -60,7 +60,8 @@ from infrapilot_workflow import (
 ## Available Workflow Tools
 
 All workflow tools live in [tools/workflow_tools.py](<tools/workflow_tools.py>)
-and are exported through [tools/__init__.py](<tools/__init__.py>) as
+and are exported through
+[tools/advanced_workflow_registry.py](<tools/advanced_workflow_registry.py>) as
 advanced tools rather than default agent tools.
 
 | Tool | Workflow intent | What it plans | Required state |
@@ -82,6 +83,10 @@ Each tool returns a machine-readable payload with at least:
 - `steps`
 - `status`
 - `error`
+
+For end-to-end API runs, `task_id` should be injected by the caller/backend and
+passed into the graph state. The agent returns that same ID in the final
+payload and no longer generates a new task ID on its own.
 
 Implementation notes:
 

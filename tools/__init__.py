@@ -9,14 +9,6 @@ without driving the default agent behavior.
 from .ec2_tools import generate_ec2_terraform
 from .s3_tools import check_s3_name_availability, generate_s3_terraform
 from .vpc_tools import generate_vpc_terraform
-from .workflow_tools import (
-    plan_deploy_service,
-    plan_scale_service,
-    plan_setup_infra,
-    plan_stop_service,
-    plan_teardown_infra,
-    plan_teardown_service,
-)
 
 S3_TOOLS = [
     check_s3_name_availability,
@@ -37,17 +29,6 @@ CORE_TOOLS = [
     *VPC_TOOLS,
 ]
 
-ADVANCED_WORKFLOW_TOOLS = [
-    plan_setup_infra,
-    plan_deploy_service,
-    plan_scale_service,
-    plan_stop_service,
-    plan_teardown_service,
-    plan_teardown_infra,
-]
-
-WORKFLOW_TOOLS = ADVANCED_WORKFLOW_TOOLS
-
 INFRAPILOT_TOOLS = [*CORE_TOOLS]
 
 __all__ = [
@@ -56,16 +37,8 @@ __all__ = [
     "S3_TOOLS",
     "EC2_TOOLS",
     "VPC_TOOLS",
-    "ADVANCED_WORKFLOW_TOOLS",
-    "WORKFLOW_TOOLS",
     "check_s3_name_availability",
     "generate_s3_terraform",
     "generate_ec2_terraform",
     "generate_vpc_terraform",
-    "plan_setup_infra",
-    "plan_deploy_service",
-    "plan_scale_service",
-    "plan_stop_service",
-    "plan_teardown_service",
-    "plan_teardown_infra",
 ]

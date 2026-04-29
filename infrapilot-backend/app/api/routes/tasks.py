@@ -28,7 +28,8 @@ def create_task(task_data: TaskCreate, db: Session = Depends(get_db)):
         graph = build_graph()
         result = graph.invoke({
             "messages": [HumanMessage(content=task_data.user_prompt)],
-            "final_payload": {}
+            "final_payload": {},
+            "task_id": new_task.task_id,
         })
         payload = result["final_payload"]
         new_task.code_payload = payload

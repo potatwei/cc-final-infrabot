@@ -230,6 +230,7 @@ class FormatterNodeTests(unittest.TestCase):
     def test_formatter_preserves_workflow_plan_fields(self) -> None:
         tool_result = plan_setup_infra.invoke({"project_name": "demo-project"})
         state = {
+            "task_id": "task-123",
             "messages": [
                 ToolMessage(
                     content=json.dumps(tool_result),
@@ -243,6 +244,7 @@ class FormatterNodeTests(unittest.TestCase):
         formatted = _formatter_node(state)["final_payload"]
 
         self.assertEqual("success", formatted["status"])
+        self.assertEqual("task-123", formatted["task_id"])
         self.assertEqual("setup_infra", formatted["intent"])
         self.assertEqual(tool_result["files"], formatted["files"])
         self.assertEqual(tool_result["commands"], formatted["commands"])
@@ -266,6 +268,7 @@ class FormatterNodeTests(unittest.TestCase):
             }
         )
         state = {
+            "task_id": "task-456",
             "messages": [
                 ToolMessage(
                     content=json.dumps(tool_result),
@@ -279,6 +282,7 @@ class FormatterNodeTests(unittest.TestCase):
         formatted = _formatter_node(state)["final_payload"]
 
         self.assertEqual("success", formatted["status"])
+        self.assertEqual("task-456", formatted["task_id"])
         self.assertEqual(tool_result["commands"], formatted["commands"])
         self.assertEqual([], formatted["commands"])
 

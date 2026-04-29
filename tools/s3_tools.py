@@ -103,13 +103,14 @@ def check_s3_name_availability(bucket_name: str) -> dict:
 
 
 @tool
-def generate_s3_terraform(bucket_name: str) -> dict:
+def generate_s3_terraform(bucket_name: str, region: str = "us-east-1") -> dict:
     """Generate Terraform HCL and CLI commands for a minimal AWS S3 bucket.
 
     This is a pure string-template tool; it performs no network calls.
 
     Args:
         bucket_name: Name to assign to the S3 bucket resource.
+        region: AWS region to lock both provider configuration and execution to.
 
     Returns:
         An agent-compatible planning payload with Terraform files and commands.
@@ -121,6 +122,10 @@ def generate_s3_terraform(bucket_name: str) -> dict:
       version = "~> 5.0"
     }}
   }}
+}}
+
+provider "aws" {{
+  region = "{region}"
 }}
 
 resource "aws_s3_bucket" "b" {{
@@ -137,10 +142,10 @@ resource "aws_s3_bucket" "b" {{
         intent="deploy_s3_bucket",
         content=hcl,
         notes=[
-            "Generates a minimal private S3 bucket configuration suitable for review before apply."
+            f"Generates a minimal private S3 bucket configuration locked to {region}."
         ],
         explanation=(
-            f"Prepared Terraform to create the S3 bucket {bucket_name}. "
+            f"Prepared Terraform to create the S3 bucket {bucket_name} in {region}. "
             "The bucket will be private by default."
         ),
     )
