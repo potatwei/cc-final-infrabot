@@ -1,40 +1,33 @@
 from pydantic import BaseModel
-from typing import Optional, List, Any
+from typing import Optional, List
 from datetime import datetime
 
 
 class FileItem(BaseModel):
     path: str
     content: str
-    type: str
+    type: Optional[str] = None
+    source_step: Optional[str] = None
 
 
 class CommandItem(BaseModel):
-    step: int
-    label: str
-    binary: str
-    args: List[str]
-    critical: bool
-
-
-class Infrastructure(BaseModel):
-    files: List[FileItem]
-    commands: List[CommandItem]
-
-
-class Metadata(BaseModel):
-    intent: str
-    provider: str
-    region: str
-    requires_confirmation: bool
-    estimated_risk: str
+    step_name: Optional[str] = None
+    description: Optional[str] = None
+    command: Optional[str] = None
+    critical: Optional[bool] = None
 
 
 class CodePayload(BaseModel):
     status: str
     task_id: str
-    metadata: Metadata
-    infrastructure: Infrastructure
+    intent: Optional[str] = None
+    files: List[FileItem] = []
+    commands: List[dict] = []
+    notes: List[str] = []
+    requires_confirmation: bool = False
+    steps: List[dict] = []
+    error: Optional[str] = None
+    missing_parameters: List[str] = []
     explanation: str
 
 

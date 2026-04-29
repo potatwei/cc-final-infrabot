@@ -1,58 +1,48 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from langchain_core.messages import HumanMessage
+import sys
+import os
+
+# This lets your FastAPI app find the agents/ and tools/ folders
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../../../'))
+
+from agents.bedrock_graph import build_graph
 from app.db.database import get_db
 from app.models.task import Task
 from app.schemas.task import TaskCreate, TaskResponse
 
 router = APIRouter()
 
-STUB_PAYLOAD = {
-    "status": "success",
-    "task_id": "stub",
-    "metadata": {
-        "intent": "deploy_s3_storage",
-        "provider": "aws",
-        "region": "us-east-1",
-        "requires_confirmation": True,
-        "estimated_risk": "low"
-    },
-    "infrastructure": {
-        "files": [
-            {
-                "path": "main.tf",
-                "content": "resource \"aws_s3_bucket\" \"b\" {\n  bucket = \"my-data-bucket\"\n}",
-                "type": "terraform"
-            }
-        ],
-        "commands": [
-            {
-                "step": 1,
-                "label": "Initializing Terraform",
-                "binary": "terraform",
-                "args": ["init"],
-                "critical": True
-            },
-            {
-                "step": 2,
-                "label": "Deploying S3 Bucket",
-                "binary": "terraform",
-                "args": ["apply", "-auto-approve"],
-                "critical": True
-            }
-        ]
-    },
-    "explanation": "Terraform configuration to create a private S3 bucket in us-east-1."
-}
-
 
 @router.post("/task", response_model=TaskResponse)
 def create_task(task_data: TaskCreate, db: Session = Depends(get_db)):
+    # 1. Save task to DB immediately
     new_task = Task(
         user_prompt=task_data.user_prompt,
         status="pending",
-        code_payload=STUB_PAYLOAD
+        code_payload=None
     )
     db.add(new_task)
+    db.commit()
+
+    try:
+        # 2. Call Person B's agent
+        graph = build_graph()
+        result = graph.invoke({
+            "messages": [HumanMessage(content=task_data.user_prompt)],
+            "final_payload": {}
+        })
+
+        # 3. Extract the payload and save it
+        payload = result["final_payload"]
+        new_task.code_payload = payload
+        new_task.status = "complete" if payload.get("status") == "success" else "failed"
+
+    except Exception as e:
+        new_task.status = "failed"
+        new_task.code_payload = {"status": "error", "explanation": str(e)}
+
     db.commit()
     db.refresh(new_task)
     return new_task
