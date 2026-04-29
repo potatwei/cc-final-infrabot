@@ -78,6 +78,16 @@ class FakeQuery:
         return self.items[0] if self.items else None
 
 
+class FakeTool:
+    """Small invoke wrapper for patching lookup/validation tools in tests."""
+
+    def __init__(self, result: dict[str, Any]) -> None:
+        self.result = result
+
+    def invoke(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        return dict(self.result)
+
+
 @unittest.skipUnless(FASTAPI_AVAILABLE, "fastapi backend dependencies are not installed")
 class BackendTaskRouteTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -129,10 +139,25 @@ class BackendTaskRouteTests(unittest.TestCase):
 
         mock_build_graph.return_value = FakeGraph()
 
-        response = self.client.post(
-            "/api/task",
-            json={"user_prompt": "Create an EC2 instance in us-east-1", "mode": "discovery"},
-        )
+        with patch.dict(
+            tasks_route.CORE_TOOLS_BY_NAME,
+            {
+                "validate_aws_region": FakeTool(
+                    {
+                        "status": "success",
+                        "intent": "validate_aws_region",
+                        "valid": True,
+                        "notes": [],
+                        "explanation": "valid",
+                    }
+                )
+            },
+            clear=False,
+        ):
+            response = self.client.post(
+                "/api/task",
+                json={"user_prompt": "Create an EC2 instance in us-east-1", "mode": "discovery"},
+            )
 
         self.assertEqual(200, response.status_code)
         body = response.json()
@@ -142,6 +167,196 @@ class BackendTaskRouteTests(unittest.TestCase):
         self.assertFalse(body["code_payload"]["ready_to_execute"])
         self.assertEqual("discovery", graph_calls[0]["mode"])
         self.assertEqual(body["task_id"], graph_calls[0]["task_id"])
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    @patch.object(tasks_route, "build_graph")
+    def test_discovery_normalization_extracts_region_and_validates_inputs(
+        self,
+        mock_build_graph,
+    ) -> None:
+        class FakeGraph:
+            def invoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "final_payload": {
+                        "status": "needs_input",
+                        "task_id": payload["task_id"],
+                        "mode": "discovery",
+                        "intent": "deploy_ec2_instance",
+                        "selected_tool": "generate_ec2_terraform",
+                        "provided_inputs": {"instance_type": "t3.micro"},
+                        "missing_inputs": ["region"],
+                        "ready_to_execute": False,
+                        "precheck_tool": None,
+                        "files": [],
+                        "commands": [],
+                        "notes": [],
+                        "requires_confirmation": False,
+                        "steps": [],
+                        "error": None,
+                        "explanation": "Region is missing.",
+                    }
+                }
+
+        mock_build_graph.return_value = FakeGraph()
+
+        with patch.dict(
+            tasks_route.CORE_TOOLS_BY_NAME,
+            {
+                "validate_aws_region": FakeTool(
+                    {
+                        "status": "success",
+                        "intent": "validate_aws_region",
+                        "valid": True,
+                        "notes": [],
+                        "explanation": "valid region",
+                    }
+                ),
+                "validate_ec2_instance_type": FakeTool(
+                    {
+                        "status": "success",
+                        "intent": "validate_ec2_instance_type",
+                        "valid": True,
+                        "available_in_region": True,
+                        "notes": [],
+                        "explanation": "valid instance type",
+                    }
+                ),
+            },
+            clear=False,
+        ):
+            response = self.client.post(
+                "/api/task",
+                json={
+                    "user_prompt": "create a t3.micro ec2 instance in us-east-1",
+                    "mode": "discovery",
+                },
+            )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("ready_to_execute", body["status"])
+        self.assertTrue(body["code_payload"]["ready_to_execute"])
+        self.assertEqual(
+            {"instance_type": "t3.micro", "region": "us-east-1"},
+            body["code_payload"]["provided_inputs"],
+        )
+        self.assertEqual([], body["code_payload"]["missing_inputs"])
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    @patch.object(tasks_route, "build_graph")
+    def test_discovery_normalization_rejects_invalid_region(
+        self,
+        mock_build_graph,
+    ) -> None:
+        class FakeGraph:
+            def invoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "final_payload": {
+                        "status": "needs_input",
+                        "task_id": payload["task_id"],
+                        "mode": "discovery",
+                        "intent": "deploy_vpc_network",
+                        "selected_tool": "generate_vpc_terraform",
+                        "provided_inputs": {"region": "east-1"},
+                        "missing_inputs": [],
+                        "ready_to_execute": True,
+                        "precheck_tool": None,
+                        "files": [],
+                        "commands": [],
+                        "notes": [],
+                        "requires_confirmation": False,
+                        "steps": [],
+                        "error": None,
+                        "explanation": "Ready.",
+                    }
+                }
+
+        mock_build_graph.return_value = FakeGraph()
+
+        with patch.dict(
+            tasks_route.CORE_TOOLS_BY_NAME,
+            {
+                "validate_aws_region": FakeTool(
+                    {
+                        "status": "success",
+                        "intent": "validate_aws_region",
+                        "valid": False,
+                        "notes": ["Try one of: us-east-1"],
+                        "explanation": "east-1 is not valid.",
+                    }
+                )
+            },
+            clear=False,
+        ):
+            response = self.client.post(
+                "/api/task",
+                json={"user_prompt": "create vpc in east-1", "mode": "discovery"},
+            )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("collecting_input", body["status"])
+        self.assertEqual("east-1", body["code_payload"]["provided_inputs"]["region"])
+        self.assertIn("region", body["code_payload"]["missing_inputs"])
+        self.assertIn("does not look valid", body["code_payload"]["explanation"])
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    @patch.object(tasks_route, "build_graph")
+    def test_discovery_extracts_invalid_region_candidate_from_prompt(
+        self,
+        mock_build_graph,
+    ) -> None:
+        class FakeGraph:
+            def invoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "final_payload": {
+                        "status": "needs_input",
+                        "task_id": payload["task_id"],
+                        "mode": "discovery",
+                        "intent": "deploy_vpc_network",
+                        "selected_tool": "generate_vpc_terraform",
+                        "provided_inputs": {},
+                        "missing_inputs": [],
+                        "ready_to_execute": True,
+                        "precheck_tool": None,
+                        "files": [],
+                        "commands": [],
+                        "notes": [],
+                        "requires_confirmation": False,
+                        "steps": [],
+                        "error": None,
+                        "explanation": "Ready.",
+                    }
+                }
+
+        mock_build_graph.return_value = FakeGraph()
+
+        with patch.dict(
+            tasks_route.CORE_TOOLS_BY_NAME,
+            {
+                "validate_aws_region": FakeTool(
+                    {
+                        "status": "success",
+                        "intent": "validate_aws_region",
+                        "valid": False,
+                        "notes": ["Try one of: us-east-1"],
+                        "explanation": "east-1 is not valid.",
+                    }
+                )
+            },
+            clear=False,
+        ):
+            response = self.client.post(
+                "/api/task",
+                json={"user_prompt": "create vpc in east-1", "mode": "discovery"},
+            )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("collecting_input", body["status"])
+        self.assertEqual("east-1", body["code_payload"]["provided_inputs"]["region"])
+        self.assertIn("region", body["code_payload"]["missing_inputs"])
+        self.assertIn("does not look valid", body["code_payload"]["explanation"])
 
     @patch.object(tasks_route, "Task", FakeTask)
     @patch.object(tasks_route, "build_graph")
