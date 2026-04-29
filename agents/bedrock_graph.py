@@ -122,6 +122,7 @@ def _formatter_node(state: AgentState) -> dict:
     requires_confirmation = False
     error: str | None = None
     final_status = "success"
+    tool_explanations: list[str] = []
 
     for msg in state["messages"]:
         if not isinstance(msg, ToolMessage):
@@ -165,6 +166,8 @@ def _formatter_node(state: AgentState) -> dict:
             final_status = "needs_input"
         if "error" in content and isinstance(content["error"], str):
             error = content["error"]
+        if "explanation" in content and isinstance(content["explanation"], str):
+            tool_explanations.append(content["explanation"])
 
     last_ai = state["messages"][-1]
     explanation = ""
@@ -191,12 +194,27 @@ def _formatter_node(state: AgentState) -> dict:
         error = blocking_deploy_error or error
         missing_parameters = ["infrastructure"]
 
+    fallback_explanation = _build_fallback_explanation(
+        status=final_status,
+        intent=intent,
+        missing_parameters=missing_parameters,
+        error=error,
+        tool_explanations=tool_explanations,
+        files=files,
+        commands=commands,
+    )
+
     if blocking_deploy_needs_infra or _should_use_fallback_explanation(explanation, final_status):
+        explanation = fallback_explanation
+    elif final_status == "success" and _should_replace_success_explanation(explanation):
         explanation = _build_fallback_explanation(
             status=final_status,
             intent=intent,
             missing_parameters=missing_parameters,
             error=error,
+            tool_explanations=tool_explanations,
+            files=files,
+            commands=commands,
         )
 
     final_payload = {
@@ -229,6 +247,23 @@ def _should_use_fallback_explanation(explanation: str, status: str) -> bool:
     }
 
 
+def _should_replace_success_explanation(explanation: str) -> bool:
+    """Detect verbose success replies that duplicate structured payload content."""
+    normalized = explanation.strip().lower()
+    if not normalized:
+        return True
+    return any(
+        marker in normalized
+        for marker in (
+            "```",
+            "### terraform files",
+            "### terraform commands",
+            "resource \"aws_",
+            "terraform {",
+        )
+    )
+
+
 def _is_blocking_deploy_needs_infrastructure(content: dict) -> bool:
     """Detect a deploy failure caused by missing infrastructure state."""
     if content.get("intent") != "deploy_service":
@@ -255,8 +290,17 @@ def _build_fallback_explanation(
     intent: str | None,
     missing_parameters: list[str],
     error: str | None,
+    tool_explanations: list[str],
+    files: list[dict],
+    commands: list[dict],
 ) -> str:
     """Provide deterministic user guidance for structured tool failures."""
+    if status == "success":
+        concise_tool_explanation = _pick_concise_tool_explanation(tool_explanations)
+        if concise_tool_explanation:
+            return concise_tool_explanation
+        return _build_success_summary(intent=intent, files=files, commands=commands)
+
     if status == "needs_input":
         missing = list(dict.fromkeys(missing_parameters))
         if intent == "deploy_service" and "infrastructure" in missing:
@@ -284,6 +328,41 @@ def _build_fallback_explanation(
         return error or "Internal workflow planning failure."
 
     return "InfraPilot finished processing your request."
+
+
+def _pick_concise_tool_explanation(tool_explanations: list[str]) -> str | None:
+    """Prefer the last concise tool explanation when available."""
+    for explanation in reversed(tool_explanations):
+        stripped = explanation.strip()
+        if stripped and not _should_replace_success_explanation(stripped):
+            return stripped
+    for explanation in reversed(tool_explanations):
+        stripped = explanation.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def _build_success_summary(
+    *,
+    intent: str | None,
+    files: list[dict],
+    commands: list[dict],
+) -> str:
+    """Generate a short success summary from the structured payload."""
+    file_count = len(files)
+    command_count = len(commands)
+    if intent:
+        return (
+            f"Prepared a {intent} plan with {file_count} file"
+            f"{'' if file_count == 1 else 's'} and {command_count} command"
+            f"{'' if command_count == 1 else 's'}."
+        )
+    return (
+        f"Prepared a plan with {file_count} file"
+        f"{'' if file_count == 1 else 's'} and {command_count} command"
+        f"{'' if command_count == 1 else 's'}."
+    )
 
 
 # --------------------------------------------------------------------------- #

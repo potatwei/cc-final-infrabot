@@ -10,6 +10,8 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from agents.bedrock_graph import _formatter_node, _route_after_action
 from run_agent import demo_workflow_payload
+from tools.ec2_tools import generate_ec2_terraform
+from tools.vpc_tools import generate_vpc_terraform
 from tools.workflow_tools import (
     plan_deploy_service,
     plan_scale_service,
@@ -252,6 +254,7 @@ class FormatterNodeTests(unittest.TestCase):
         self.assertEqual(tool_result["notes"], formatted["notes"])
         self.assertTrue(formatted["requires_confirmation"])
         self.assertIsNone(formatted["error"])
+        self.assertEqual("Planned infrastructure setup.", formatted["explanation"])
 
     def test_formatter_preserves_deploy_commands(self) -> None:
         tool_result = plan_deploy_service.invoke(
@@ -285,6 +288,58 @@ class FormatterNodeTests(unittest.TestCase):
         self.assertEqual("task-456", formatted["task_id"])
         self.assertEqual(tool_result["commands"], formatted["commands"])
         self.assertEqual([], formatted["commands"])
+        self.assertEqual("Planned service deploy.", formatted["explanation"])
+
+    def test_formatter_replaces_verbose_success_explanation_with_tool_summary(self) -> None:
+        tool_result = generate_ec2_terraform.invoke(
+            {
+                "instance_type": "t3.micro",
+                "region": "us-east-1",
+                "instance_name": "demo-ec2",
+            }
+        )
+        state = {
+            "task_id": "task-789",
+            "messages": [
+                ToolMessage(
+                    content=json.dumps(tool_result),
+                    tool_call_id="tool-verbose",
+                    name="generate_ec2_terraform",
+                ),
+                AIMessage(
+                    content=(
+                        "Here is the full Terraform plan.\n\n### Terraform Files\n```hcl\n"
+                        "terraform {\n  required_providers {}\n}\n```"
+                    )
+                ),
+            ]
+        }
+
+        formatted = _formatter_node(state)["final_payload"]
+
+        self.assertEqual("success", formatted["status"])
+        self.assertEqual(tool_result["explanation"], formatted["explanation"])
+        self.assertNotIn("```", formatted["explanation"])
+
+    def test_formatter_preserves_short_success_explanation(self) -> None:
+        tool_result = generate_vpc_terraform.invoke({"region": "us-east-1"})
+        short_explanation = "Prepared the VPC plan and Terraform commands."
+        state = {
+            "task_id": "task-790",
+            "messages": [
+                ToolMessage(
+                    content=json.dumps(tool_result),
+                    tool_call_id="tool-short",
+                    name="generate_vpc_terraform",
+                ),
+                AIMessage(content=short_explanation),
+            ]
+        }
+
+        formatted = _formatter_node(state)["final_payload"]
+
+        self.assertEqual("success", formatted["status"])
+        self.assertEqual(short_explanation, formatted["explanation"])
 
     def test_formatter_marks_structured_tool_errors(self) -> None:
         tool_result = plan_deploy_service.invoke(
