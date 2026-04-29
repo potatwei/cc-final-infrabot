@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from textwrap import dedent
+
 
 def command_entry(
     *,
@@ -29,7 +31,7 @@ def terraform_payload(
     explanation: str,
     notes: list[str] | None = None,
     file_path: str = "main.tf",
-) -> dict[str, object]:
+    ) -> dict[str, object]:
     """Build the common payload shape for core Terraform generation tools."""
     return {
         "status": "success",
@@ -62,3 +64,8 @@ def terraform_payload(
         "missing_parameters": [],
         "explanation": explanation,
     }
+
+
+def render_terraform_template(template: str) -> str:
+    """Normalize inline Terraform text blocks for stable readable output."""
+    return dedent(template).strip() + "\n"

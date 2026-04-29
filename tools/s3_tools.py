@@ -6,7 +6,7 @@ import boto3
 from botocore.exceptions import ClientError
 from langchain_core.tools import tool
 
-from .core_payloads import terraform_payload
+from .core_payloads import render_terraform_template, terraform_payload
 
 
 @tool
@@ -115,28 +115,31 @@ def generate_s3_terraform(bucket_name: str, region: str = "us-east-1") -> dict:
     Returns:
         An agent-compatible planning payload with Terraform files and commands.
     """
-    hcl = f'''terraform {{
-  required_providers {{
-    aws = {{
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }}
-  }}
-}}
+    hcl = render_terraform_template(
+        f"""
+        terraform {{
+          required_providers {{
+            aws = {{
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }}
+          }}
+        }}
 
-provider "aws" {{
-  region = "{region}"
-}}
+        provider "aws" {{
+          region = "{region}"
+        }}
 
-resource "aws_s3_bucket" "b" {{
-  bucket = "{bucket_name}"
+        resource "aws_s3_bucket" "b" {{
+          bucket = "{bucket_name}"
 
-  tags = {{
-    Name      = "InfraPilot-Storage"
-    ManagedBy = "InfraPilot"
-  }}
-}}
-'''
+          tags = {{
+            Name      = "InfraPilot-Storage"
+            ManagedBy = "InfraPilot"
+          }}
+        }}
+        """
+    )
 
     return terraform_payload(
         intent="deploy_s3_bucket",

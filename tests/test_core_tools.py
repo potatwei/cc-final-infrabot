@@ -79,7 +79,7 @@ class EC2ToolTests(unittest.TestCase):
         self.assertEqual("success", result["status"])
         self.assertEqual("deploy_ec2_instance", result["intent"])
         self.assertEqual("main.tf", result["files"][0]["path"])
-        self.assertIn('instance_type = "t3.micro"', result["files"][0]["content"])
+        self.assertIn('instance_type          = "t3.micro"', result["files"][0]["content"])
         self.assertIn('resource "aws_vpc" "main"', result["files"][0]["content"])
         self.assertEqual("terraform", result["commands"][1]["command"]["binary"])
         self.assertTrue(result["requires_confirmation"])
