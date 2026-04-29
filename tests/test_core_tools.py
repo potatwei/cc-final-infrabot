@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from botocore.exceptions import ClientError
@@ -12,6 +16,9 @@ from tools.advanced_workflow_registry import ADVANCED_WORKFLOW_TOOLS
 from tools.ec2_tools import generate_ec2_terraform
 from tools.s3_tools import check_s3_name_availability, generate_s3_terraform
 from tools.vpc_tools import generate_vpc_terraform
+
+
+TERRAFORM_BIN = shutil.which("terraform")
 
 
 class CoreToolRegistryTests(unittest.TestCase):
@@ -101,3 +108,70 @@ class VPCToolTests(unittest.TestCase):
         self.assertIn('cidr_block           = "10.42.0.0/16"', result["files"][0]["content"])
         self.assertEqual("terraform", result["commands"][0]["command"]["binary"])
         self.assertTrue(result["requires_confirmation"])
+
+
+@unittest.skipIf(TERRAFORM_BIN is None, "terraform is not installed")
+class TerraformValidationSmokeTests(unittest.TestCase):
+    def _write_payload_files(self, payload: dict[str, object], target_dir: Path) -> None:
+        for entry in payload["files"]:
+            file_path = target_dir / entry["path"]
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(entry["content"], encoding="utf-8")
+
+    def _run_terraform(self, working_dir: Path, *args: str) -> None:
+        result = subprocess.run(
+            [TERRAFORM_BIN, *args],
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            0,
+            result.returncode,
+            msg=(
+                f"terraform {' '.join(args)} failed in {working_dir}\n"
+                f"stdout:\n{result.stdout}\n"
+                f"stderr:\n{result.stderr}"
+            ),
+        )
+
+    def _assert_payload_validates(self, payload: dict[str, object]) -> None:
+        with tempfile.TemporaryDirectory(prefix="infrapilot-tf-") as temp_dir:
+            working_dir = Path(temp_dir)
+            self._write_payload_files(payload, working_dir)
+            self._run_terraform(working_dir, "fmt", "-check")
+            self._run_terraform(
+                working_dir,
+                "init",
+                "-backend=false",
+                "-input=false",
+                "-no-color",
+            )
+            self._run_terraform(working_dir, "validate", "-no-color")
+
+    def test_generated_s3_plan_validates(self) -> None:
+        payload = generate_s3_terraform.invoke(
+            {"bucket_name": "infra-pilot-demo-bucket", "region": "us-east-1"}
+        )
+        self._assert_payload_validates(payload)
+
+    def test_generated_ec2_plan_validates(self) -> None:
+        payload = generate_ec2_terraform.invoke(
+            {
+                "instance_type": "t3.micro",
+                "region": "us-east-1",
+                "instance_name": "infra-pilot-validate-ec2",
+            }
+        )
+        self._assert_payload_validates(payload)
+
+    def test_generated_vpc_plan_validates(self) -> None:
+        payload = generate_vpc_terraform.invoke(
+            {
+                "region": "us-east-1",
+                "vpc_cidr": "10.77.0.0/16",
+                "vpc_name": "infra-pilot-validate-vpc",
+            }
+        )
+        self._assert_payload_validates(payload)
