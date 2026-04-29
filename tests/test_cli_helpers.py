@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
-from infrapilot_cli import determine_next_step
+from infrapilot_cli import determine_next_step, run_chat
 
 
 class CliHelperTests(unittest.TestCase):
@@ -39,6 +40,26 @@ class CliHelperTests(unittest.TestCase):
         }
 
         self.assertEqual("done", determine_next_step(response))
+
+    @patch("infrapilot_cli.run_deploy", return_value=0)
+    @patch("builtins.input", side_effect=["Create a VPC in us-east-1", "exit"])
+    def test_chat_mode_dispatches_requests_to_run_deploy(
+        self,
+        _mock_input,
+        mock_run_deploy,
+    ) -> None:
+        result = run_chat(base_url="http://127.0.0.1:8000", auto_confirm=False)
+
+        self.assertEqual(0, result)
+        mock_run_deploy.assert_called_once_with(
+            "Create a VPC in us-east-1",
+            base_url="http://127.0.0.1:8000",
+            auto_confirm=False,
+        )
+
+    @patch("builtins.input", side_effect=["exit"])
+    def test_chat_mode_exits_cleanly(self, _mock_input) -> None:
+        self.assertEqual(0, run_chat(base_url="http://127.0.0.1:8000"))
 
 
 if __name__ == "__main__":

@@ -188,6 +188,26 @@ def run_deploy(prompt: str, *, base_url: str, auto_confirm: bool = False) -> int
     return 0
 
 
+def run_chat(*, base_url: str, auto_confirm: bool = False) -> int:
+    """Open a simple REPL for repeated deploy requests."""
+    print("InfraPilot chat mode. Type a request, or 'exit' to quit.")
+    while True:
+        try:
+            prompt = input("infrapilot> ").strip()
+        except EOFError:
+            print()
+            return 0
+
+        if not prompt:
+            continue
+        if prompt.lower() in {"exit", "quit"}:
+            return 0
+
+        result = run_deploy(prompt, base_url=base_url, auto_confirm=auto_confirm)
+        if result != 0:
+            return result
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="InfraPilot backend CLI")
     parser.add_argument(
@@ -212,6 +232,13 @@ def build_parser() -> argparse.ArgumentParser:
     confirm_parser = subparsers.add_parser("confirm", help="Mark one task as complete")
     confirm_parser.add_argument("task_id", help="Task id returned by the backend")
 
+    chat_parser = subparsers.add_parser("chat", help="Open an interactive request prompt")
+    chat_parser.add_argument(
+        "--auto-confirm",
+        action="store_true",
+        help="Mark awaiting_confirmation tasks as complete without prompting.",
+    )
+
     return parser
 
 
@@ -234,6 +261,11 @@ def main(argv: list[str] | None = None) -> int:
             response = confirm_task(args.task_id, base_url=args.backend_url)
             print(response.get("message", "Task marked complete."))
             return 0
+        if args.command == "chat":
+            return run_chat(
+                base_url=args.backend_url,
+                auto_confirm=args.auto_confirm,
+            )
         parser.error("Unknown command")
         return 2
     except KeyboardInterrupt as exc:
