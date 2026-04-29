@@ -7,7 +7,7 @@ query, and prints:
   2. the final ``final_payload`` that would be returned to the API client.
 
 Usage (from the Infrapilot/ directory):
-    python run_agent.py "deploy an api service named demo"
+    python run_agent.py "create a t3.micro ec2 instance in us-east-1"
     python run_agent.py --demo deploy-success
     python run_agent.py --demo deploy-needs-infra
     python run_agent.py --demo stop-needs-service-name
@@ -27,7 +27,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from agents.bedrock_graph import build_graph
 from tools.workflow_tools import plan_deploy_service, plan_stop_service
 
-DEFAULT_QUERY = "Plan deployment of an API service named demo in us-east-1."
+DEFAULT_QUERY = "Create a t3.micro EC2 instance in us-east-1."
 
 
 def _sample_infrastructure() -> dict[str, object]:
@@ -61,7 +61,7 @@ def _sample_service_state() -> dict[str, object]:
 
 
 def demo_workflow_payload(name: str) -> dict:
-    """Run one local workflow-tool scenario without invoking Bedrock."""
+    """Run one advanced workflow-tool scenario without invoking Bedrock."""
     if name == "deploy-success":
         return plan_deploy_service.invoke(
             {

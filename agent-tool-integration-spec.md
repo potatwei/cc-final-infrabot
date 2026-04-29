@@ -28,7 +28,23 @@ Responsibilities are split as follows:
   - executes commands and Terraform
   - persists updated state
 
-Supported intents:
+## Default Agent Surface
+
+The default `build_graph()` agent is currently scoped to one-shot resource
+planning that maps cleanly onto the project progress report:
+
+- `check_s3_name_availability`
+- `deploy_s3_bucket`
+- `deploy_ec2_instance`
+
+These tools are the default registry exposed to the LangGraph agent and the
+FastAPI backend.
+
+## Advanced Workflow Surface
+
+The repo also retains an advanced ECS/Fargate workflow family backed by
+`infrapilot-workflow-core`, but these tools are intentionally isolated from the
+default agent registry:
 
 - `setup_infra`
 - `deploy_service`
@@ -39,7 +55,7 @@ Supported intents:
 
 ## Caller Input
 
-All requests should provide:
+Advanced workflow requests should provide:
 
 - `project_name`
 - `region`
@@ -88,6 +104,40 @@ prepared to provide:
 
 ## Tool Usage
 
+### `generate_s3_terraform`
+
+Input:
+
+```json
+{
+  "bucket_name": "demo-bucket"
+}
+```
+
+Result:
+
+- returns `main.tf`
+- returns Terraform init/apply command payloads
+
+### `generate_ec2_terraform`
+
+Input:
+
+```json
+{
+  "instance_type": "t3.micro",
+  "region": "us-east-1",
+  "instance_name": "demo-ec2"
+}
+```
+
+Result:
+
+- returns `main.tf`
+- returns Terraform init/apply command payloads
+
+### Advanced workflow tools
+
 ### `setup_infra`
 
 Input:
@@ -129,7 +179,8 @@ Input:
 Result:
 
 - returns `service/<service_name>/main.tf`
-- returns three deploy command payloads
+- currently returns placeholder shell steps for image build/auth/push
+- may return top-level deploy command payloads later when workflow-core provides executable shell command metadata
 - returns `needs_input` if infrastructure is missing
 
 ### `scale_service`

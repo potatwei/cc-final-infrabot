@@ -86,25 +86,10 @@ class WorkflowAdapterToolTests(unittest.TestCase):
             ],
             [step["name"] for step in result["steps"]],
         )
-        self.assertEqual(
-            [
-                "build_container_image",
-                "authenticate_to_ecr",
-                "push_container_image",
-            ],
-            [item["step_name"] for item in result["commands"]],
-        )
-        self.assertEqual("docker", result["commands"][0]["command"]["binary"])
-        self.assertEqual(
-            ["build", "-t", "123456789012.dkr.ecr.us-east-1.amazonaws.com/demo:v1", "."],
-            result["commands"][0]["command"]["args"],
-        )
-        self.assertEqual("docker", result["commands"][1]["command"]["binary"])
-        self.assertEqual("aws", result["commands"][1]["stdin_source"]["binary"])
-        self.assertEqual("docker", result["commands"][2]["command"]["binary"])
+        self.assertEqual([], result["commands"])
         for step in result["steps"][:3]:
-            self.assertIsNotNone(step["execution_payload"])
-        self.assertIsNone(result["steps"][3]["execution_payload"])
+            self.assertNotIn("execution_payload", step)
+        self.assertNotIn("execution_payload", result["steps"][3])
 
     def test_plan_deploy_service_returns_structured_error(self) -> None:
         result = plan_deploy_service.invoke(
@@ -295,8 +280,7 @@ class FormatterNodeTests(unittest.TestCase):
 
         self.assertEqual("success", formatted["status"])
         self.assertEqual(tool_result["commands"], formatted["commands"])
-        self.assertEqual(3, len(formatted["commands"]))
-        self.assertEqual("aws", formatted["commands"][1]["stdin_source"]["binary"])
+        self.assertEqual([], formatted["commands"])
 
     def test_formatter_marks_structured_tool_errors(self) -> None:
         tool_result = plan_deploy_service.invoke(
@@ -455,7 +439,7 @@ class RunAgentDemoTests(unittest.TestCase):
 
         self.assertEqual("success", payload["status"])
         self.assertEqual("deploy_service", payload["intent"])
-        self.assertEqual(3, len(payload["commands"]))
+        self.assertEqual([], payload["commands"])
 
     def test_demo_workflow_payload_deploy_needs_infra(self) -> None:
         payload = demo_workflow_payload("deploy-needs-infra")

@@ -1,8 +1,31 @@
 # cc-final-infrabot
 
 InfraPilot agent/orchestration repo. This repo owns tool registration,
-agent orchestration, and agent-facing output shaping. It does not own the
-deterministic workflow planner.
+agent orchestration, and agent-facing output shaping.
+
+The current default agent surface is intentionally small:
+
+- core resource tools for one-shot AWS planning (`S3`, `EC2`)
+- advanced ECS/Fargate workflow tools kept in-repo but isolated from the
+  default agent registry until the broader workflow story is ready
+
+## Tool Surface
+
+Default agent tools:
+
+- `check_s3_name_availability`
+- `generate_s3_terraform`
+- `generate_ec2_terraform`
+
+Advanced workflow tools currently remain available in code but are not
+registered in the default agent tool list:
+
+- `plan_setup_infra`
+- `plan_deploy_service`
+- `plan_scale_service`
+- `plan_stop_service`
+- `plan_teardown_service`
+- `plan_teardown_infra`
 
 ## Workflow-Core Boundary
 
@@ -35,7 +58,8 @@ from infrapilot_workflow import (
 ## Available Workflow Tools
 
 All workflow tools live in [tools/workflow_tools.py](<tools/workflow_tools.py>)
-and are registered through [tools/__init__.py](<tools/__init__.py>).
+and are exported through [tools/__init__.py](<tools/__init__.py>) as
+advanced tools rather than default agent tools.
 
 | Tool | Workflow intent | What it plans | Required state |
 | --- | --- | --- | --- |
@@ -60,8 +84,8 @@ Each tool returns a machine-readable payload with at least:
 Implementation notes:
 
 - `files` is flattened from workflow-core `step.generated_files`
-- `steps` preserves the original workflow-core plan steps for backend/debug visibility, including `execution_payload` on deploy shell steps
-- `commands` mirrors workflow-core `shell_command` steps into a top-level list with `step_name`, `description`, `command`, and optional `stdin_source`
+- `steps` preserves the original workflow-core plan steps for backend/debug visibility
+- `commands` is populated only when workflow-core includes executable shell command payloads; current advanced deploy workflow returns placeholder shell steps without top-level commands
 - `ValueError` from workflow-core validation is converted into structured tool output instead of crashing the agent
 - workflow-core still plans one intent at a time; this repo does not combine `setup_infra` and `deploy_service` into one plan
 - `deploy_service` still requires existing infrastructure state, while `stop_service` and `teardown_service` still require explicit `service_name`
@@ -84,8 +108,14 @@ python3.13 -m venv .venv
 .venv/bin/python -m compileall tools agents run_agent.py tests
 ```
 
-For direct workflow smoke checks without Bedrock, point `PYTHONPATH` at the
-local workflow-core checkout and run one of the built-in demos:
+For the default resource-planning smoke path with Bedrock:
+
+```bash
+.venv/bin/python run_agent.py "create a t3.micro ec2 instance in us-east-1"
+```
+
+For direct advanced workflow smoke checks without Bedrock, point `PYTHONPATH`
+at the local workflow-core checkout and run one of the built-in demos:
 
 ```bash
 PYTHONPATH="/Users/maxtai/Cloud Computing/FinalProject/InfraPilot" \
