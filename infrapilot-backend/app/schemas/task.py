@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 
@@ -44,6 +44,11 @@ class CodePayload(BaseModel):
 class TaskCreate(BaseModel):
     user_prompt: str
     mode: str = "execution"
+
+
+class TaskContinue(BaseModel):
+    user_input: Optional[str] = None
+    provided_inputs: dict = Field(default_factory=dict)
 
 
 class TaskResponse(BaseModel):

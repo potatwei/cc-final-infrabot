@@ -44,6 +44,8 @@ CORE_TOOLS = [
     *VPC_TOOLS,
 ]
 
+CORE_TOOLS_BY_NAME = {tool.name: tool for tool in CORE_TOOLS}
+
 CORE_TOOL_INPUT_SPECS: dict[str, ToolInputSpec] = {
     "check_s3_name_availability": {
         "intent": "check_s3_name_availability",
@@ -93,6 +95,7 @@ INFRAPILOT_TOOLS = [*CORE_TOOLS]
 __all__ = [
     "INFRAPILOT_TOOLS",
     "CORE_TOOLS",
+    "CORE_TOOLS_BY_NAME",
     "CORE_TOOL_INPUT_SPECS",
     "ToolInputSpec",
     "S3_TOOLS",

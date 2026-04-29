@@ -61,6 +61,22 @@ class FakeSession:
     def refresh(self, obj: FakeTask) -> None:
         return None
 
+    def query(self, _model):
+        return FakeQuery(self.added)
+
+
+class FakeQuery:
+    """Tiny query object that ignores SQLAlchemy filter expressions."""
+
+    def __init__(self, items: list[FakeTask]) -> None:
+        self.items = items
+
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def first(self):
+        return self.items[0] if self.items else None
+
 
 @unittest.skipUnless(FASTAPI_AVAILABLE, "fastapi backend dependencies are not installed")
 class BackendTaskRouteTests(unittest.TestCase):
@@ -167,6 +183,149 @@ class BackendTaskRouteTests(unittest.TestCase):
         self.assertEqual("deploy_vpc_network", body["code_payload"]["intent"])
         self.assertEqual("execution", graph_calls[0]["mode"])
         self.assertEqual(body["task_id"], graph_calls[0]["task_id"])
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    def test_continue_task_with_partial_inputs_keeps_collecting_input(self) -> None:
+        existing_task = FakeTask(
+            user_prompt="Create an EC2 instance",
+            status="collecting_input",
+            code_payload={
+                "status": "needs_input",
+                "task_id": "task-continue-1",
+                "mode": "discovery",
+                "intent": "deploy_ec2_instance",
+                "selected_tool": "generate_ec2_terraform",
+                "required_inputs": ["instance_type", "region", "instance_name"],
+                "recommended_inputs": [],
+                "optional_inputs": ["vpc_cidr", "public_subnet_cidr"],
+                "defaults": {"custom_context": "demo"},
+                "provided_inputs": {},
+                "missing_inputs": ["instance_type", "region", "instance_name"],
+                "missing_parameters": ["instance_type", "region", "instance_name"],
+                "ready_to_execute": False,
+                "precheck_tool": None,
+                "files": [],
+                "commands": [],
+                "notes": [],
+                "requires_confirmation": False,
+                "steps": [],
+                "error": None,
+                "explanation": "Need more information.",
+            },
+            task_id="task-continue-1",
+        )
+        self.fake_db.add(existing_task)
+
+        response = self.client.post(
+            "/api/task/task-continue-1/continue",
+            json={"provided_inputs": {"instance_type": "t3.micro"}},
+        )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("collecting_input", body["status"])
+        self.assertEqual(
+            {"instance_type": "t3.micro"},
+            body["code_payload"]["provided_inputs"],
+        )
+        self.assertEqual(
+            ["region", "instance_name"],
+            body["code_payload"]["missing_inputs"],
+        )
+        self.assertFalse(body["code_payload"]["ready_to_execute"])
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    def test_continue_task_with_structured_input_executes_tool(self) -> None:
+        existing_task = FakeTask(
+            user_prompt="Create an EC2 instance in us-east-1",
+            status="collecting_input",
+            code_payload={
+                "status": "needs_input",
+                "task_id": "task-continue-2",
+                "mode": "discovery",
+                "intent": "deploy_ec2_instance",
+                "selected_tool": "generate_ec2_terraform",
+                "required_inputs": ["instance_type"],
+                "recommended_inputs": ["region"],
+                "optional_inputs": ["instance_name", "vpc_cidr", "public_subnet_cidr"],
+                "defaults": {
+                    "region": "us-east-1",
+                    "instance_name": "infrapilot-ec2",
+                    "vpc_cidr": "10.50.0.0/16",
+                    "public_subnet_cidr": "10.50.1.0/24",
+                },
+                "provided_inputs": {"region": "us-east-1"},
+                "missing_inputs": ["instance_type"],
+                "missing_parameters": ["instance_type"],
+                "ready_to_execute": False,
+                "precheck_tool": None,
+                "files": [],
+                "commands": [],
+                "notes": [],
+                "requires_confirmation": False,
+                "steps": [],
+                "error": None,
+                "explanation": "Need the EC2 instance type.",
+            },
+            task_id="task-continue-2",
+        )
+        self.fake_db.add(existing_task)
+
+        response = self.client.post(
+            "/api/task/task-continue-2/continue",
+            json={"provided_inputs": {"instance_type": "t3.micro"}},
+        )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("awaiting_confirmation", body["status"])
+        self.assertEqual("success", body["code_payload"]["status"])
+        self.assertEqual("deploy_ec2_instance", body["code_payload"]["intent"])
+        self.assertEqual("task-continue-2", body["code_payload"]["task_id"])
+        self.assertEqual(1, len(body["code_payload"]["files"]))
+        self.assertEqual(2, len(body["code_payload"]["commands"]))
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    def test_continue_task_uses_raw_user_input_for_first_missing_field(self) -> None:
+        existing_task = FakeTask(
+            user_prompt="Create an EC2 instance in us-east-1",
+            status="collecting_input",
+            code_payload={
+                "status": "needs_input",
+                "task_id": "task-continue-3",
+                "mode": "discovery",
+                "intent": "deploy_ec2_instance",
+                "selected_tool": "generate_ec2_terraform",
+                "required_inputs": ["instance_type"],
+                "recommended_inputs": ["region"],
+                "optional_inputs": ["instance_name", "vpc_cidr", "public_subnet_cidr"],
+                "defaults": {"region": "us-east-1"},
+                "provided_inputs": {"region": "us-east-1"},
+                "missing_inputs": ["instance_type"],
+                "missing_parameters": ["instance_type"],
+                "ready_to_execute": False,
+                "precheck_tool": None,
+                "files": [],
+                "commands": [],
+                "notes": [],
+                "requires_confirmation": False,
+                "steps": [],
+                "error": None,
+                "explanation": "Need the EC2 instance type.",
+            },
+            task_id="task-continue-3",
+        )
+        self.fake_db.add(existing_task)
+
+        response = self.client.post(
+            "/api/task/task-continue-3/continue",
+            json={"user_input": "t3.micro"},
+        )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("awaiting_confirmation", body["status"])
+        self.assertEqual("task-continue-3", body["code_payload"]["task_id"])
 
 
 if __name__ == "__main__":
