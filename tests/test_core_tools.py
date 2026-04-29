@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 from botocore.exceptions import ClientError
 
+from tools import CORE_TOOL_INPUT_SPECS
 from tools import INFRAPILOT_TOOLS
 from tools.advanced_workflow_registry import ADVANCED_WORKFLOW_TOOLS
 from tools.ec2_tools import generate_ec2_terraform
@@ -36,6 +37,25 @@ class CoreToolRegistryTests(unittest.TestCase):
             default_names,
         )
         self.assertTrue(advanced_names.isdisjoint(default_names))
+
+    def test_core_tool_specs_cover_default_registry(self) -> None:
+        default_names = {tool.name for tool in INFRAPILOT_TOOLS}
+        self.assertEqual(default_names, set(CORE_TOOL_INPUT_SPECS))
+
+    def test_ec2_and_s3_specs_capture_discovery_requirements(self) -> None:
+        ec2_spec = CORE_TOOL_INPUT_SPECS["generate_ec2_terraform"]
+        s3_spec = CORE_TOOL_INPUT_SPECS["generate_s3_terraform"]
+        vpc_spec = CORE_TOOL_INPUT_SPECS["generate_vpc_terraform"]
+
+        self.assertEqual(["instance_type"], ec2_spec["required_inputs"])
+        self.assertEqual(["region"], ec2_spec["recommended_inputs"])
+        self.assertEqual("us-east-1", ec2_spec["defaults"]["region"])
+
+        self.assertEqual(["bucket_name"], s3_spec["required_inputs"])
+        self.assertEqual("check_s3_name_availability", s3_spec["precheck_tool"])
+
+        self.assertEqual([], vpc_spec["required_inputs"])
+        self.assertEqual(["region"], vpc_spec["recommended_inputs"])
 
 
 class S3ToolTests(unittest.TestCase):
