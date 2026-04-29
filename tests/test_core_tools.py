@@ -10,6 +10,7 @@ from botocore.exceptions import ClientError
 from tools import ADVANCED_WORKFLOW_TOOLS, INFRAPILOT_TOOLS
 from tools.ec2_tools import generate_ec2_terraform
 from tools.s3_tools import check_s3_name_availability, generate_s3_terraform
+from tools.vpc_tools import generate_vpc_terraform
 
 
 class CoreToolRegistryTests(unittest.TestCase):
@@ -22,6 +23,7 @@ class CoreToolRegistryTests(unittest.TestCase):
                 "check_s3_name_availability",
                 "generate_s3_terraform",
                 "generate_ec2_terraform",
+                "generate_vpc_terraform",
             },
             default_names,
         )
@@ -75,4 +77,22 @@ class EC2ToolTests(unittest.TestCase):
         self.assertEqual("main.tf", result["files"][0]["path"])
         self.assertIn('instance_type = "t3.micro"', result["files"][0]["content"])
         self.assertEqual("terraform", result["commands"][1]["command"]["binary"])
+        self.assertTrue(result["requires_confirmation"])
+
+
+class VPCToolTests(unittest.TestCase):
+    def test_generate_vpc_terraform_returns_agent_payload(self) -> None:
+        result = generate_vpc_terraform.invoke(
+            {
+                "region": "us-east-1",
+                "vpc_cidr": "10.42.0.0/16",
+                "vpc_name": "demo-vpc",
+            }
+        )
+
+        self.assertEqual("success", result["status"])
+        self.assertEqual("deploy_vpc_network", result["intent"])
+        self.assertEqual("main.tf", result["files"][0]["path"])
+        self.assertIn('cidr_block           = "10.42.0.0/16"', result["files"][0]["content"])
+        self.assertEqual("terraform", result["commands"][0]["command"]["binary"])
         self.assertTrue(result["requires_confirmation"])

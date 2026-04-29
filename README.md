@@ -6,6 +6,7 @@ agent orchestration, and agent-facing output shaping.
 The current default agent surface is intentionally small:
 
 - core resource tools for one-shot AWS planning (`S3`, `EC2`)
+- core resource tools for one-shot AWS planning (`S3`, `EC2`, `VPC`)
 - advanced ECS/Fargate workflow tools kept in-repo but isolated from the
   default agent registry until the broader workflow story is ready
 
@@ -16,6 +17,7 @@ Default agent tools:
 - `check_s3_name_availability`
 - `generate_s3_terraform`
 - `generate_ec2_terraform`
+- `generate_vpc_terraform`
 
 Advanced workflow tools currently remain available in code but are not
 registered in the default agent tool list:

@@ -36,6 +36,7 @@ planning that maps cleanly onto the project progress report:
 - `check_s3_name_availability`
 - `deploy_s3_bucket`
 - `deploy_ec2_instance`
+- `deploy_vpc_network`
 
 These tools are the default registry exposed to the LangGraph agent and the
 FastAPI backend.
@@ -128,6 +129,23 @@ Input:
   "instance_type": "t3.micro",
   "region": "us-east-1",
   "instance_name": "demo-ec2"
+}
+```
+
+Result:
+
+- returns `main.tf`
+- returns Terraform init/apply command payloads
+
+### `generate_vpc_terraform`
+
+Input:
+
+```json
+{
+  "region": "us-east-1",
+  "vpc_cidr": "10.0.0.0/16",
+  "vpc_name": "demo-vpc"
 }
 ```
 
