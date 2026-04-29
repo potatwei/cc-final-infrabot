@@ -7,6 +7,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../../../'))
 
 from agents.bedrock_graph import build_graph
+from app.core.task_status import map_task_status
 from app.db.database import get_db
 from app.models.task import Task
 from app.schemas.task import TaskCreate, TaskResponse
@@ -33,7 +34,7 @@ def create_task(task_data: TaskCreate, db: Session = Depends(get_db)):
         })
         payload = result["final_payload"]
         new_task.code_payload = payload
-        new_task.status = "complete" if payload.get("status") == "success" else "failed"
+        new_task.status = map_task_status(payload)
 
     except Exception as e:
         new_task.status = "failed"
