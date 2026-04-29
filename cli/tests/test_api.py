@@ -1,28 +1,25 @@
 from infrapilot.api import FakeClient, get_client
 
 
-def test_fake_client_submit_returns_person_a_shape():
+def test_fake_client_submit_returns_flat_shape():
     c = FakeClient()
     payload = c.submit("deploy my app on port 3000")
 
     assert payload["status"] == "success"
     assert payload["task_id"].startswith("fake-")
-    assert "metadata" in payload and "infrastructure" in payload and "explanation" in payload
-    meta = payload["metadata"]
-    for key in ("intent", "provider", "region", "requires_confirmation", "estimated_risk"):
-        assert key in meta, f"metadata missing {key}"
-    infra = payload["infrastructure"]
-    assert isinstance(infra["files"], list)
-    assert isinstance(infra["commands"], list)
-    assert all({"step", "label", "binary", "args", "critical"} <= set(c.keys()) for c in infra["commands"])
+    for key in ("intent", "files", "commands", "requires_confirmation", "explanation"):
+        assert key in payload, f"missing {key}"
+    assert isinstance(payload["files"], list)
+    assert isinstance(payload["commands"], list)
+    assert all({"step_name", "description", "command"} <= set(c.keys()) for c in payload["commands"])
 
 
 def test_fake_client_intent_dispatch():
     c = FakeClient()
-    assert c.submit("set up my infrastructure")["metadata"]["intent"] == "setup_infra"
-    assert c.submit("deploy my app")["metadata"]["intent"] == "deploy_service"
-    assert c.submit("scale to 5")["metadata"]["intent"] == "scale_service"
-    assert c.submit("tear it all down")["metadata"]["intent"] == "teardown_all"
+    assert c.submit("set up my infrastructure")["intent"] == "setup_infra"
+    assert c.submit("deploy my app")["intent"] == "deploy_service"
+    assert c.submit("scale to 5")["intent"] == "scale_service"
+    assert c.submit("tear it all down")["intent"] == "teardown_all"
 
 
 def test_fake_client_confirm_approved():
@@ -48,4 +45,3 @@ def test_fake_client_confirm_unknown_id():
 
 def test_get_client_defaults_to_fake():
     assert isinstance(get_client({}), FakeClient)
-    assert isinstance(get_client({"api_url": "x", "api_key": "y"}), FakeClient)  # Part 1 behavior

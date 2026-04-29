@@ -19,6 +19,9 @@ from typing import Protocol
 
 class Client(Protocol):
     def submit(self, user_prompt: str) -> dict: ...
+    def continue_task(self, task_id: str, user_input: str | None = None,
+                      provided_inputs: dict | None = None,
+                      execute: bool = False) -> dict: ...
     def confirm(self, task_id: str, approved: bool) -> dict: ...
 
 
@@ -31,76 +34,63 @@ def _canned_payload(user_prompt: str, task_id: str) -> dict:
     text = user_prompt.lower()
 
     if "tear" in text or "destroy" in text or "remove" in text:
-        intent, risk, explanation = (
-            "teardown_all",
-            "high",
-            "Destroy all resources previously created for this project.",
-        )
+        intent = "teardown_all"
+        explanation = "Destroy all resources previously created for this project."
         commands = [
-            {"step": 1, "label": "Initializing Terraform", "binary": "terraform",
-             "args": ["init"], "critical": True},
-            {"step": 2, "label": "Destroying resources", "binary": "terraform",
-             "args": ["destroy", "-auto-approve"], "critical": True},
+            {"step_name": "tf_init", "description": "Initializing Terraform",
+             "command": "terraform init", "critical": True},
+            {"step_name": "tf_destroy", "description": "Destroying resources",
+             "command": "terraform destroy -auto-approve", "critical": True},
         ]
         files = []
     elif "scale" in text or "stop" in text:
-        intent, risk, explanation = (
-            "scale_service",
-            "low",
-            "Update the desired task count for the service.",
-        )
+        intent = "scale_service"
+        explanation = "Update the desired task count for the service."
         files = [{
             "path": "main.tf", "type": "terraform",
             "content": 'resource "null_resource" "svc" { triggers = { count = 1 } }',
         }]
         commands = [
-            {"step": 1, "label": "Re-applying service", "binary": "terraform",
-             "args": ["apply", "-auto-approve"], "critical": True},
+            {"step_name": "tf_apply", "description": "Re-applying service",
+             "command": "terraform apply -auto-approve", "critical": True},
         ]
     elif "deploy" in text or "launch" in text:
-        intent, risk, explanation = (
-            "deploy_service",
-            "medium",
-            "Build the image, push to ECR, and run an ECS service behind an ALB.",
-        )
+        intent = "deploy_service"
+        explanation = "Build the image, push to ECR, and run an ECS service behind an ALB."
         files = [{
             "path": "main.tf", "type": "terraform",
             "content": 'resource "aws_s3_bucket" "demo" { bucket = "demo" }',
         }]
         commands = [
-            {"step": 1, "label": "Initializing Terraform", "binary": "terraform",
-             "args": ["init"], "critical": True},
-            {"step": 2, "label": "Deploying service", "binary": "terraform",
-             "args": ["apply", "-auto-approve"], "critical": True},
+            {"step_name": "tf_init", "description": "Initializing Terraform",
+             "command": "terraform init", "critical": True},
+            {"step_name": "tf_apply", "description": "Deploying service",
+             "command": "terraform apply -auto-approve", "critical": True},
         ]
     else:
-        intent, risk, explanation = (
-            "setup_infra",
-            "low",
-            "Provision an S3 bucket as demo infrastructure in us-east-1.",
-        )
+        intent = "setup_infra"
+        explanation = "Provision an S3 bucket as demo infrastructure in us-east-1."
         files = [{
             "path": "main.tf", "type": "terraform",
             "content": 'resource "aws_s3_bucket" "b" { bucket = "my-data-bucket" }',
         }]
         commands = [
-            {"step": 1, "label": "Initializing Terraform", "binary": "terraform",
-             "args": ["init"], "critical": True},
-            {"step": 2, "label": "Deploying S3 Bucket", "binary": "terraform",
-             "args": ["apply", "-auto-approve"], "critical": True},
+            {"step_name": "tf_init", "description": "Initializing Terraform",
+             "command": "terraform init", "critical": True},
+            {"step_name": "tf_apply", "description": "Deploying S3 Bucket",
+             "command": "terraform apply -auto-approve", "critical": True},
         ]
 
     return {
         "status": "success",
         "task_id": task_id,
-        "metadata": {
-            "intent": intent,
-            "provider": "aws",
-            "region": "us-east-1",
-            "requires_confirmation": True,
-            "estimated_risk": risk,
-        },
-        "infrastructure": {"files": files, "commands": commands},
+        "intent": intent,
+        "files": files,
+        "commands": commands,
+        "notes": [],
+        "requires_confirmation": True,
+        "steps": [],
+        "missing_parameters": [],
         "explanation": explanation,
     }
 
@@ -117,6 +107,14 @@ class FakeClient:
         self._tasks[task_id] = payload
         return payload
 
+    def continue_task(self, task_id: str, user_input: str | None = None,
+                      provided_inputs: dict | None = None,
+                      execute: bool = False) -> dict:
+        # Offline mode does not support multi-turn; return the existing payload.
+        return self._tasks.get(task_id) or {
+            "status": "error", "task_id": task_id, "message": "unknown task_id"
+        }
+
     def confirm(self, task_id: str, approved: bool) -> dict:
         payload = self._tasks.get(task_id)
         if payload is None:
@@ -129,7 +127,7 @@ class FakeClient:
             "task_id": task_id,
             "message": (
                 f"[fake] Backend would now execute "
-                f"{len(payload['infrastructure']['commands'])} command(s) on the cloud."
+                f"{len(payload.get('commands') or [])} command(s) on the cloud."
             ),
         }
 
