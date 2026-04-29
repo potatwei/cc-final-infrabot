@@ -244,6 +244,73 @@ class BackendTaskRouteTests(unittest.TestCase):
 
     @patch.object(tasks_route, "Task", FakeTask)
     @patch.object(tasks_route, "build_graph")
+    def test_discovery_normalization_rejects_placeholder_instance_type(
+        self,
+        mock_build_graph,
+    ) -> None:
+        class FakeGraph:
+            def invoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "final_payload": {
+                        "status": "success",
+                        "task_id": payload["task_id"],
+                        "mode": "discovery",
+                        "intent": "deploy_ec2_instance",
+                        "selected_tool": "generate_ec2_terraform",
+                        "provided_inputs": {"instance_type": "null"},
+                        "missing_inputs": [],
+                        "ready_to_execute": True,
+                        "precheck_tool": None,
+                        "files": [],
+                        "commands": [],
+                        "notes": [],
+                        "requires_confirmation": False,
+                        "steps": [],
+                        "error": None,
+                        "explanation": "Ready.",
+                    }
+                }
+
+        mock_build_graph.return_value = FakeGraph()
+
+        with patch.dict(
+            tasks_route.CORE_TOOLS_BY_NAME,
+            {
+                "validate_aws_region": FakeTool(
+                    {
+                        "status": "success",
+                        "intent": "validate_aws_region",
+                        "valid": True,
+                        "notes": [],
+                        "explanation": "valid region",
+                    }
+                ),
+                "validate_ec2_instance_type": FakeTool(
+                    {
+                        "status": "success",
+                        "intent": "validate_ec2_instance_type",
+                        "valid": False,
+                        "available_in_region": False,
+                        "notes": [],
+                        "explanation": "invalid instance type",
+                    }
+                ),
+            },
+            clear=False,
+        ):
+            response = self.client.post(
+                "/api/task",
+                json={"user_prompt": "build ec2", "mode": "discovery"},
+            )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("collecting_input", body["status"])
+        self.assertIn("instance_type", body["code_payload"]["missing_inputs"])
+        self.assertEqual("null", body["code_payload"]["provided_inputs"]["instance_type"])
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    @patch.object(tasks_route, "build_graph")
     def test_discovery_normalization_rejects_invalid_region(
         self,
         mock_build_graph,

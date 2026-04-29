@@ -104,6 +104,7 @@ def print_response_summary(response: dict[str, Any]) -> None:
     print(f"task_id: {response.get('task_id')}")
     print(f"task_status: {response.get('status')}")
     print(f"code_status: {code_payload.get('status')}")
+    notes = code_payload.get("notes") or []
 
     if code_payload.get("mode") == "discovery":
         print(f"selected_tool: {code_payload.get('selected_tool')}")
@@ -153,6 +154,11 @@ def print_response_summary(response: dict[str, Any]) -> None:
                 args = " ".join(command.get("args") or [])
                 print(f"  - {binary} {args}".strip())
 
+    if notes:
+        print("notes:")
+        for note in notes:
+            print(f"  - {note}")
+
     explanation = code_payload.get("explanation")
     if explanation:
         print("explanation:")
@@ -167,6 +173,8 @@ def prompt_for_missing_inputs(response: dict[str, Any]) -> dict[str, str]:
         value = input(f"{field_name}: ").strip()
         if not value:
             raise KeyboardInterrupt(f"No value provided for {field_name}.")
+        if value.lower() in {"exit", "quit", "cancel"}:
+            raise KeyboardInterrupt(f"Input collection cancelled at {field_name}.")
         updates[field_name] = value
     return updates
 

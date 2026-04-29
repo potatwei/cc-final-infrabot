@@ -130,7 +130,7 @@ CORE_TOOL_INPUT_SPECS: dict[str, ToolInputSpec] = {
         "precheck_tool": None,
         "validators": {
             "region": "validate_aws_region",
-            "instance_type": "validate_ec2_instance",
+            "instance_type": "validate_ec2_instance_type",
         },
     },
     "generate_vpc_terraform": {

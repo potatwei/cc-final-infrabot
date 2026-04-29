@@ -6,7 +6,12 @@ import unittest
 from io import StringIO
 from unittest.mock import patch
 
-from infrapilot_cli import determine_next_step, print_response_summary, run_chat
+from infrapilot_cli import (
+    determine_next_step,
+    print_response_summary,
+    prompt_for_missing_inputs,
+    run_chat,
+)
 
 
 class CliHelperTests(unittest.TestCase):
@@ -62,6 +67,39 @@ class CliHelperTests(unittest.TestCase):
         self.assertIn("valid: True", output)
         self.assertIn("regions:", output)
         self.assertIn("us-east-1", output)
+
+    def test_discovery_summary_prints_notes(self) -> None:
+        response = {
+            "task_id": "task-456",
+            "status": "collecting_input",
+            "code_payload": {
+                "status": "needs_input",
+                "mode": "discovery",
+                "selected_tool": "generate_vpc_terraform",
+                "provided_inputs": {"region": "east-1"},
+                "missing_inputs": ["region"],
+                "notes": ["Try one of: us-east-1, us-west-2"],
+                "explanation": "The region 'east-1' does not look valid.",
+            },
+        }
+
+        with patch("sys.stdout", new=StringIO()) as stdout:
+            print_response_summary(response)
+
+        output = stdout.getvalue()
+        self.assertIn("notes:", output)
+        self.assertIn("Try one of: us-east-1, us-west-2", output)
+
+    @patch("builtins.input", side_effect=["cancel"])
+    def test_prompt_for_missing_inputs_allows_cancel_keyword(self, _mock_input) -> None:
+        response = {
+            "code_payload": {
+                "missing_inputs": ["bucket_name"],
+            }
+        }
+
+        with self.assertRaises(KeyboardInterrupt):
+            prompt_for_missing_inputs(response)
 
     @patch("infrapilot_cli.run_deploy", return_value=0)
     @patch("builtins.input", side_effect=["Create a VPC in us-east-1", "exit"])

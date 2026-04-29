@@ -22,6 +22,7 @@ IMMEDIATE_DISCOVERY_TOOLS = {
     "list_ec2_instance_type_offerings",
     "validate_ec2_instance_type",
 }
+PLACEHOLDER_VALUES = {"null", "none", "n/a", "na", "unknown", "unset", "tbd"}
 
 
 @router.post("/task", response_model=TaskResponse)
@@ -174,7 +175,11 @@ def confirm_task(task_id: str, db: Session = Depends(get_db)):
 
 
 def _has_value(value) -> bool:
-    return value not in (None, "")
+    if value in (None, ""):
+        return False
+    if isinstance(value, str) and value.strip().lower() in PLACEHOLDER_VALUES:
+        return False
+    return True
 
 
 def _first_missing_input(payload: dict) -> str | None:
