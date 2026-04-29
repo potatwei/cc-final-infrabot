@@ -8,6 +8,7 @@ query, and prints:
 
 Usage (from the Infrapilot/ directory):
     python run_agent.py "create a t3.micro ec2 instance in us-east-1"
+    python run_agent.py --mode discovery "create an ec2 instance"
     python run_agent.py --demo deploy-success
     python run_agent.py --demo deploy-needs-infra
     python run_agent.py --demo stop-needs-service-name
@@ -118,15 +119,16 @@ def _format_message(msg) -> str:
     return f"[{type(msg).__name__}] {getattr(msg, 'content', msg)!r}"
 
 
-def run(query: str) -> dict | None:
+def run(query: str, *, mode: str = "execution") -> dict | None:
     graph = build_graph()
     inputs = {
         "messages": [HumanMessage(content=f"User request: {query}")],
         "task_id": "local-preview",
+        "mode": mode,
     }
 
     print("=" * 72)
-    print(f"USER QUERY: {query}")
+    print(f"USER QUERY ({mode}): {query}")
     print("=" * 72)
 
     final_payload: dict | None = None
@@ -171,5 +173,9 @@ if __name__ == "__main__":
     if len(args) >= 2 and args[0] == "--demo":
         run_demo(args[1])
     else:
+        mode = "execution"
+        if len(args) >= 2 and args[0] == "--mode":
+            mode = args[1].strip().lower()
+            args = args[2:]
         cli_query = " ".join(args).strip()
-        run(cli_query or DEFAULT_QUERY)
+        run(cli_query or DEFAULT_QUERY, mode=mode)

@@ -22,7 +22,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
-from tools import INFRAPILOT_TOOLS
+from tools import CORE_TOOL_INPUT_SPECS, INFRAPILOT_TOOLS
 
 
 # --------------------------------------------------------------------------- #
@@ -38,6 +38,7 @@ class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     final_payload: dict
     task_id: NotRequired[str]
+    mode: NotRequired[str]
 
 
 # --------------------------------------------------------------------------- #
@@ -73,6 +74,42 @@ General policy:
      crash. Explain what is missing and what the user should provide next.
 """
 
+
+def _build_discovery_prompt() -> str:
+    """Build the discovery-mode prompt from the current core tool catalog."""
+    tool_catalog = json.dumps(CORE_TOOL_INPUT_SPECS, indent=2, sort_keys=True)
+    return f"""You are InfraPilot in discovery mode.
+
+Your job is to inspect the user's request and decide which single tool from the
+catalog best matches it. Do not call tools. Do not generate Terraform.
+
+Return exactly one JSON object with these keys:
+{{
+  "selected_tool": string or null,
+  "intent": string or null,
+  "required_inputs": string[],
+  "recommended_inputs": string[],
+  "optional_inputs": string[],
+  "defaults": object,
+  "provided_inputs": object,
+  "missing_inputs": string[],
+  "ready_to_execute": boolean,
+  "precheck_tool": string or null,
+  "explanation": string
+}}
+
+Rules:
+  1. Pick only one tool from the catalog.
+  2. Extract only values the user actually provided; do not invent values.
+  3. Keep defaultable fields out of missing_inputs when defaults are available.
+  4. Set ready_to_execute=true only when all required_inputs are present.
+  5. If the request does not match any supported tool, set selected_tool=null,
+     ready_to_execute=false, and explain the unsupported gap.
+
+Tool catalog:
+{tool_catalog}
+"""
+
 # SYSTEM_PROMPT = """You are InfraPilot, an AWS infrastructure assistant.
 
 # Your job is to translate a user's natural-language request into concrete
@@ -80,7 +117,7 @@ General policy:
 # """
 
 
-def _build_llm():
+def _build_llm(*, bind_tools: bool = True):
     """Instantiate the Bedrock Nova-Micro model with tools bound."""
     llm = ChatBedrockConverse(
         model_id="amazon.nova-micro-v1:0",
@@ -88,7 +125,9 @@ def _build_llm():
         temperature=0,
         max_tokens=2000,
     )
-    return llm.bind_tools(INFRAPILOT_TOOLS)
+    if bind_tools:
+        return llm.bind_tools(INFRAPILOT_TOOLS)
+    return llm
 
 ## We use aws bedrock to interact with the model
 ## https://reference.langchain.com/python/langchain-aws/chat_models/bedrock_converse/ChatBedrockConverse
@@ -99,11 +138,16 @@ def _build_llm():
 # --------------------------------------------------------------------------- #
 def _agent_node(state: AgentState) -> dict:
     """Run the LLM over the current message history."""
-    llm = _build_llm()
+    mode = state.get("mode", "execution")
+    llm = _build_llm(bind_tools=mode != "discovery")
     messages = state["messages"]
 
+    prompt = _build_discovery_prompt() if mode == "discovery" else SYSTEM_PROMPT
+
     if not messages or not isinstance(messages[0], SystemMessage):
-        messages = [SystemMessage(content=SYSTEM_PROMPT), *messages]
+        messages = [SystemMessage(content=prompt), *messages]
+    else:
+        messages = [SystemMessage(content=prompt), *messages[1:]]
 
     response = llm.invoke(messages)
     return {"messages": [response]}
@@ -111,6 +155,9 @@ def _agent_node(state: AgentState) -> dict:
 
 def _formatter_node(state: AgentState) -> dict:
     """Collapse the conversation into the strict FinalResponse payload."""
+    if state.get("mode") == "discovery":
+        return {"final_payload": _build_discovery_payload(state)}
+
     blocking_deploy_needs_infra = False
     blocking_deploy_error: str | None = None
     files: list[dict] = []
@@ -231,6 +278,161 @@ def _formatter_node(state: AgentState) -> dict:
         "explanation": explanation or "InfraPilot finished processing your request.",
     }
     return {"final_payload": final_payload}
+
+
+def _build_discovery_payload(state: AgentState) -> dict:
+    """Shape the last discovery response into a structured pre-execution payload."""
+    raw_text = _message_text(state["messages"][-1]) if state["messages"] else ""
+    content = _parse_json_object(raw_text)
+
+    if not isinstance(content, dict):
+        return {
+            "status": "error",
+            "task_id": state.get("task_id", ""),
+            "mode": "discovery",
+            "intent": None,
+            "selected_tool": None,
+            "required_inputs": [],
+            "recommended_inputs": [],
+            "optional_inputs": [],
+            "defaults": {},
+            "provided_inputs": {},
+            "missing_inputs": [],
+            "missing_parameters": [],
+            "ready_to_execute": False,
+            "precheck_tool": None,
+            "files": [],
+            "commands": [],
+            "notes": [],
+            "requires_confirmation": False,
+            "steps": [],
+            "error": "Discovery response was not valid JSON.",
+            "explanation": "InfraPilot could not summarize the discovery step.",
+        }
+
+    selected_tool = content.get("selected_tool")
+    spec = CORE_TOOL_INPUT_SPECS.get(selected_tool) if isinstance(selected_tool, str) else None
+
+    required_inputs = _string_list(content.get("required_inputs")) or (
+        list(spec["required_inputs"]) if spec else []
+    )
+    recommended_inputs = _string_list(content.get("recommended_inputs")) or (
+        list(spec["recommended_inputs"]) if spec else []
+    )
+    optional_inputs = _string_list(content.get("optional_inputs")) or (
+        list(spec["optional_inputs"]) if spec else []
+    )
+    defaults = content.get("defaults") if isinstance(content.get("defaults"), dict) else (
+        dict(spec["defaults"]) if spec else {}
+    )
+    provided_inputs = (
+        content.get("provided_inputs") if isinstance(content.get("provided_inputs"), dict) else {}
+    )
+    missing_inputs = _string_list(content.get("missing_inputs"))
+    if not missing_inputs:
+        missing_inputs = [
+            name for name in required_inputs if name not in provided_inputs or provided_inputs[name] in ("", None)
+        ]
+
+    ready_to_execute = bool(content.get("ready_to_execute")) and not missing_inputs
+    intent = content.get("intent") if isinstance(content.get("intent"), str) else (
+        spec["intent"] if spec else None
+    )
+    precheck_tool = content.get("precheck_tool") if isinstance(content.get("precheck_tool"), str) else (
+        spec["precheck_tool"] if spec else None
+    )
+    explanation = (
+        content.get("explanation")
+        if isinstance(content.get("explanation"), str) and content.get("explanation").strip()
+        else _build_discovery_explanation(selected_tool, required_inputs, missing_inputs)
+    )
+
+    status = "success" if ready_to_execute else "needs_input"
+    if selected_tool is None:
+        status = "needs_input"
+
+    return {
+        "status": status,
+        "task_id": state.get("task_id", ""),
+        "mode": "discovery",
+        "intent": intent,
+        "selected_tool": selected_tool,
+        "required_inputs": required_inputs,
+        "recommended_inputs": recommended_inputs,
+        "optional_inputs": optional_inputs,
+        "defaults": defaults,
+        "provided_inputs": provided_inputs,
+        "missing_inputs": missing_inputs,
+        "missing_parameters": missing_inputs,
+        "ready_to_execute": ready_to_execute,
+        "precheck_tool": precheck_tool,
+        "files": [],
+        "commands": [],
+        "notes": [],
+        "requires_confirmation": False,
+        "steps": [],
+        "error": None,
+        "explanation": explanation,
+    }
+
+
+def _message_text(message: BaseMessage) -> str:
+    """Collapse a LangChain message content field to plain text."""
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in content
+        ).strip()
+    return str(content)
+
+
+def _parse_json_object(raw_text: str) -> dict | None:
+    """Parse a raw JSON object, tolerating markdown fences."""
+    stripped = raw_text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.strip("`")
+        if stripped.startswith("json"):
+            stripped = stripped[4:].strip()
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        try:
+            parsed = json.loads(stripped[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _string_list(value: object) -> list[str]:
+    """Normalize a JSON array to a list[str]."""
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str)]
+
+
+def _build_discovery_explanation(
+    selected_tool: str | None,
+    required_inputs: list[str],
+    missing_inputs: list[str],
+) -> str:
+    """Fallback explanation for discovery-mode payloads."""
+    if not selected_tool:
+        return "InfraPilot could not match the request to a supported tool yet."
+    if missing_inputs:
+        return (
+            f"Selected {selected_tool}, but more input is required before execution: "
+            f"{', '.join(missing_inputs)}."
+        )
+    if required_inputs:
+        return f"Selected {selected_tool} and collected all required inputs for execution."
+    return f"Selected {selected_tool}; execution can proceed with defaults."
 
 
 def _should_use_fallback_explanation(explanation: str, status: str) -> bool:
