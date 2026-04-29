@@ -8,6 +8,8 @@ from unittest.mock import patch
 
 from infrapilot_cli import (
     determine_next_step,
+    _resolve_lookup_prompt,
+    _build_discovery_display_inputs,
     print_response_summary,
     prompt_for_discovery_input,
     run_chat,
@@ -148,25 +150,59 @@ class CliHelperTests(unittest.TestCase):
 
         self.assertEqual(("confirm", None), prompt_for_discovery_input(response))
 
-    @patch("infrapilot_cli.run_deploy", return_value=0)
-    @patch("builtins.input", side_effect=["Create a VPC in us-east-1", "exit"])
-    def test_chat_mode_dispatches_requests_to_run_deploy(
+    @patch("builtins.input", side_effect=["exit"])
+    def test_chat_mode_exits_cleanly(self, _mock_input) -> None:
+        self.assertEqual(0, run_chat(base_url="http://127.0.0.1:8000"))
+
+    def test_resolve_lookup_prompt_uses_active_region(self) -> None:
+        active_response = {
+            "code_payload": {
+                "mode": "discovery",
+                "required_inputs": ["instance_type"],
+                "recommended_inputs": ["region"],
+                "optional_inputs": [],
+                "defaults": {"region": "us-east-1"},
+                "provided_inputs": {"region": "us-east-2"},
+            }
+        }
+
+        self.assertEqual(
+            "what instance types are available in us-east-2",
+            _resolve_lookup_prompt("instance_types", active_response),
+        )
+
+    def test_build_discovery_display_inputs_includes_defaults_and_missing(self) -> None:
+        payload = {
+            "required_inputs": ["instance_type"],
+            "recommended_inputs": ["region"],
+            "optional_inputs": ["instance_name"],
+            "defaults": {"region": "us-east-1"},
+            "provided_inputs": {"instance_name": "web-box"},
+        }
+
+        self.assertEqual(
+            {
+                "instance_type": "(missing)",
+                "region": "us-east-1",
+                "instance_name": "web-box",
+            },
+            _build_discovery_display_inputs(payload),
+        )
+
+    @patch("infrapilot_cli.print_task_table")
+    @patch("infrapilot_cli.list_tasks", return_value=[{"task_id": "task-1", "status": "planned", "user_prompt": "build ec2"}])
+    @patch("builtins.input", side_effect=["/tasks", "exit"])
+    def test_chat_mode_supports_tasks_command(
         self,
         _mock_input,
-        mock_run_deploy,
+        mock_list_tasks,
+        mock_print_task_table,
     ) -> None:
         result = run_chat(base_url="http://127.0.0.1:8000", auto_confirm=False)
 
         self.assertEqual(0, result)
-        mock_run_deploy.assert_called_once_with(
-            "Create a VPC in us-east-1",
-            base_url="http://127.0.0.1:8000",
-            auto_confirm=False,
-        )
-
-    @patch("builtins.input", side_effect=["exit"])
-    def test_chat_mode_exits_cleanly(self, _mock_input) -> None:
-        self.assertEqual(0, run_chat(base_url="http://127.0.0.1:8000"))
+        mock_list_tasks.assert_called_once_with(base_url="http://127.0.0.1:8000", limit=10)
+        mock_print_task_table.assert_called_once()
 
 
 if __name__ == "__main__":

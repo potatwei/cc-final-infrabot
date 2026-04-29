@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from langchain_core.messages import HumanMessage
 import re
@@ -173,6 +173,18 @@ def get_task(task_id: str, db: Session = Depends(get_db)):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
+
+
+@router.get("/tasks", response_model=list[TaskResponse])
+def list_tasks(
+    limit: int = Query(default=10, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Task)
+    created_at_column = getattr(Task, "created_at", None)
+    if hasattr(created_at_column, "desc"):
+        query = query.order_by(created_at_column.desc())
+    return query.limit(limit).all()
 
 
 @router.post("/task/{task_id}/confirm")

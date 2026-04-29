@@ -82,6 +82,10 @@ def get_task(task_id: str, *, base_url: str) -> dict[str, Any]:
     return api_request(method="GET", path=f"/api/task/{task_id}", base_url=base_url)
 
 
+def list_tasks(*, base_url: str, limit: int = 10) -> list[dict[str, Any]]:
+    return api_request(method="GET", path=f"/api/tasks?limit={limit}", base_url=base_url)
+
+
 def confirm_task(task_id: str, *, base_url: str) -> dict[str, Any]:
     return api_request(method="POST", path=f"/api/task/{task_id}/confirm", base_url=base_url)
 
@@ -212,6 +216,130 @@ def prompt_for_discovery_input(response: dict[str, Any]) -> tuple[str, str | Non
     return ("update", value)
 
 
+def print_task_table(tasks: list[dict[str, Any]]) -> None:
+    if not tasks:
+        print("No tasks found.")
+        return
+    for task in tasks:
+        print(
+            f"{task.get('task_id')} | {task.get('status')} | "
+            f"{(task.get('user_prompt') or '').strip()}"
+        )
+
+
+def print_chat_help() -> None:
+    print("Commands:")
+    print("  /help                Show available chat commands")
+    print("  /lookup <query>      Run a read-only lookup without changing the active task")
+    print("  /show [task_id]      Show the active task or one specific task")
+    print("  /tasks [limit]       List recent tasks")
+    print("  /confirm             Execute the active ready-to-execute discovery task")
+    print("  /cancel              Clear the active task from the chat session")
+    print("Examples:")
+    print("  /lookup regions")
+    print("  /lookup instance_types")
+    print("  /show")
+    print("  /tasks 5")
+
+
+def _active_discovery_values(response: dict[str, Any] | None) -> dict[str, Any]:
+    if not response:
+        return {}
+    code_payload = response.get("code_payload") or {}
+    return _build_discovery_display_inputs(code_payload) if code_payload.get("mode") == "discovery" else {}
+
+
+def _resolve_lookup_prompt(query: str, active_response: dict[str, Any] | None) -> str:
+    normalized = query.strip().lower()
+    active_values = _active_discovery_values(active_response)
+    region = active_values.get("region")
+
+    if normalized in {"regions", "region"}:
+        return "what aws regions are available"
+    if normalized in {"instance_types", "instance type", "instance types"}:
+        if isinstance(region, str) and region not in {"(missing)", ""}:
+            return f"what instance types are available in {region}"
+        return "what instance types are available in us-east-1"
+    return query
+
+
+def _handle_chat_command(
+    raw_input: str,
+    *,
+    active_response: dict[str, Any] | None,
+    base_url: str,
+) -> tuple[dict[str, Any] | None, bool]:
+    parts = raw_input.strip().split(maxsplit=1)
+    command = parts[0].lower()
+    argument = parts[1].strip() if len(parts) > 1 else ""
+
+    if command == "/help":
+        print_chat_help()
+        return active_response, False
+
+    if command == "/lookup":
+        if not argument:
+            print("Usage: /lookup <query>")
+            return active_response, False
+        lookup_prompt = _resolve_lookup_prompt(argument, active_response)
+        lookup_response = create_discovery_task(lookup_prompt, base_url=base_url)
+        print_response_summary(lookup_response)
+        return active_response, False
+
+    if command == "/show":
+        if argument:
+            response = get_task(argument, base_url=base_url)
+            print_response_summary(response)
+            return active_response, False
+        if active_response:
+            print_response_summary(active_response)
+        else:
+            print("No active task in this chat session.")
+        return active_response, False
+
+    if command == "/tasks":
+        limit = 10
+        if argument:
+            try:
+                limit = int(argument)
+            except ValueError:
+                print("Usage: /tasks [limit]")
+                return active_response, False
+        print_task_table(list_tasks(base_url=base_url, limit=limit))
+        return active_response, False
+
+    if command == "/confirm":
+        if not active_response:
+            print("No active task to confirm.")
+            return active_response, False
+        code_payload = active_response.get("code_payload") or {}
+        if code_payload.get("mode") == "discovery" and code_payload.get("ready_to_execute"):
+            response = continue_task(
+                active_response["task_id"],
+                base_url=base_url,
+                execute=True,
+            )
+            print_response_summary(response)
+            return response, False
+        if active_response.get("status") == "awaiting_confirmation":
+            confirmation = confirm_task(active_response["task_id"], base_url=base_url)
+            print(confirmation.get("message", "Task marked complete."))
+            refreshed = get_task(active_response["task_id"], base_url=base_url)
+            return refreshed, False
+        print("The active task is not ready for /confirm.")
+        return active_response, False
+
+    if command == "/cancel":
+        if active_response:
+            print(f"Cancelled active task {active_response.get('task_id')}.")
+        else:
+            print("No active task to cancel.")
+        return None, False
+
+    print(f"Unknown command: {command}. Use /help.")
+    return active_response, False
+
+
 def run_deploy(prompt: str, *, base_url: str, auto_confirm: bool = False) -> int:
     """Drive discovery, continuation, and final confirmation through the backend."""
     response = create_discovery_task(prompt, base_url=base_url)
@@ -262,6 +390,7 @@ def run_deploy(prompt: str, *, base_url: str, auto_confirm: bool = False) -> int
 def run_chat(*, base_url: str, auto_confirm: bool = False) -> int:
     """Open a simple REPL for repeated deploy requests."""
     print("InfraPilot chat mode. Type a request, or 'exit' to quit.")
+    active_response: dict[str, Any] | None = None
     while True:
         try:
             prompt = input("infrapilot> ").strip()
@@ -274,9 +403,30 @@ def run_chat(*, base_url: str, auto_confirm: bool = False) -> int:
         if prompt.lower() in {"exit", "quit"}:
             return 0
 
-        result = run_deploy(prompt, base_url=base_url, auto_confirm=auto_confirm)
-        if result != 0:
-            return result
+        if prompt.startswith("/"):
+            active_response, should_exit = _handle_chat_command(
+                prompt,
+                active_response=active_response,
+                base_url=base_url,
+            )
+            if should_exit:
+                return 0
+            continue
+
+        if active_response and (active_response.get("code_payload") or {}).get("mode") == "discovery":
+            try:
+                active_response = continue_task(
+                    active_response["task_id"],
+                    base_url=base_url,
+                    user_input=prompt,
+                )
+            except BackendApiError:
+                raise
+            print_response_summary(active_response)
+            continue
+
+        active_response = create_discovery_task(prompt, base_url=base_url)
+        print_response_summary(active_response)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -74,8 +74,18 @@ class FakeQuery:
     def filter(self, *_args, **_kwargs):
         return self
 
+    def order_by(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, count: int):
+        self.items = self.items[:count]
+        return self
+
     def first(self):
         return self.items[0] if self.items else None
+
+    def all(self):
+        return list(self.items)
 
 
 class FakeTool:
@@ -99,6 +109,21 @@ class BackendTaskRouteTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.app.dependency_overrides.clear()
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    def test_list_tasks_returns_recent_tasks(self) -> None:
+        first = FakeTask(user_prompt="first task", status="planned", task_id="task-a")
+        second = FakeTask(user_prompt="second task", status="complete", task_id="task-b")
+        self.fake_db.add(first)
+        self.fake_db.add(second)
+
+        response = self.client.get("/api/tasks?limit=2")
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual(2, len(body))
+        self.assertEqual("task-a", body[0]["task_id"])
+        self.assertEqual("task-b", body[1]["task_id"])
 
     @patch.object(tasks_route, "Task", FakeTask)
     @patch.object(tasks_route, "build_graph")
