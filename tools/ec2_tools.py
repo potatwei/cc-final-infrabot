@@ -4,23 +4,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
-
-def _command_entry(
-    *,
-    step_name: str,
-    description: str,
-    binary: str,
-    args: list[str],
-) -> dict[str, object]:
-    return {
-        "step_name": step_name,
-        "description": description,
-        "critical": True,
-        "command": {
-            "binary": binary,
-            "args": args,
-        },
-    }
+from .core_payloads import terraform_payload
 
 
 @tool
@@ -72,39 +56,14 @@ output "public_ip" {{
 }}
 '''
 
-    return {
-        "status": "success",
-        "intent": "deploy_ec2_instance",
-        "files": [
-            {
-                "path": "main.tf",
-                "content": hcl,
-                "type": "terraform",
-            }
-        ],
-        "commands": [
-            _command_entry(
-                step_name="terraform_init",
-                description="Initialize Terraform in the generated workspace.",
-                binary="terraform",
-                args=["init"],
-            ),
-            _command_entry(
-                step_name="terraform_apply",
-                description="Apply the EC2 Terraform plan.",
-                binary="terraform",
-                args=["apply", "-auto-approve"],
-            ),
-        ],
-        "notes": [
+    return terraform_payload(
+        intent="deploy_ec2_instance",
+        content=hcl,
+        notes=[
             "Uses the latest Amazon Linux 2023 AMI published by Amazon in the selected region."
         ],
-        "requires_confirmation": True,
-        "steps": [],
-        "error": None,
-        "missing_parameters": [],
-        "explanation": (
+        explanation=(
             f"Prepared Terraform to create a {instance_type} EC2 instance in {region} "
             f"with the name {instance_name}."
         ),
-    }
+    )

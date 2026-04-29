@@ -4,23 +4,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
-
-def _command_entry(
-    *,
-    step_name: str,
-    description: str,
-    binary: str,
-    args: list[str],
-) -> dict[str, object]:
-    return {
-        "step_name": step_name,
-        "description": description,
-        "critical": True,
-        "command": {
-            "binary": binary,
-            "args": args,
-        },
-    }
+from .core_payloads import terraform_payload
 
 
 @tool
@@ -111,39 +95,14 @@ output "public_subnet_ids" {{
 }}
 '''
 
-    return {
-        "status": "success",
-        "intent": "deploy_vpc_network",
-        "files": [
-            {
-                "path": "main.tf",
-                "content": hcl,
-                "type": "terraform",
-            }
-        ],
-        "commands": [
-            _command_entry(
-                step_name="terraform_init",
-                description="Initialize Terraform in the generated workspace.",
-                binary="terraform",
-                args=["init"],
-            ),
-            _command_entry(
-                step_name="terraform_apply",
-                description="Apply the VPC Terraform plan.",
-                binary="terraform",
-                args=["apply", "-auto-approve"],
-            ),
-        ],
-        "notes": [
+    return terraform_payload(
+        intent="deploy_vpc_network",
+        content=hcl,
+        notes=[
             "Creates a basic public VPC layout with two subnets and an internet gateway."
         ],
-        "requires_confirmation": True,
-        "steps": [],
-        "error": None,
-        "missing_parameters": [],
-        "explanation": (
+        explanation=(
             f"Prepared Terraform to create a basic VPC named {vpc_name} in {region} "
             f"with CIDR {vpc_cidr}."
         ),
-    }
+    )

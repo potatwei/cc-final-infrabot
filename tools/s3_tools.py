@@ -6,23 +6,7 @@ import boto3
 from botocore.exceptions import ClientError
 from langchain_core.tools import tool
 
-
-def _command_entry(
-    *,
-    step_name: str,
-    description: str,
-    binary: str,
-    args: list[str],
-) -> dict[str, object]:
-    return {
-        "step_name": step_name,
-        "description": description,
-        "critical": True,
-        "command": {
-            "binary": binary,
-            "args": args,
-        },
-    }
+from .core_payloads import terraform_payload
 
 
 @tool
@@ -149,39 +133,14 @@ resource "aws_s3_bucket" "b" {{
 }}
 '''
 
-    return {
-        "status": "success",
-        "intent": "deploy_s3_bucket",
-        "files": [
-            {
-                "path": "main.tf",
-                "content": hcl,
-                "type": "terraform",
-            }
-        ],
-        "commands": [
-            _command_entry(
-                step_name="terraform_init",
-                description="Initialize Terraform in the generated workspace.",
-                binary="terraform",
-                args=["init"],
-            ),
-            _command_entry(
-                step_name="terraform_apply",
-                description="Apply the S3 Terraform plan.",
-                binary="terraform",
-                args=["apply", "-auto-approve"],
-            ),
-        ],
-        "notes": [
+    return terraform_payload(
+        intent="deploy_s3_bucket",
+        content=hcl,
+        notes=[
             "Generates a minimal private S3 bucket configuration suitable for review before apply."
         ],
-        "requires_confirmation": True,
-        "steps": [],
-        "error": None,
-        "missing_parameters": [],
-        "explanation": (
+        explanation=(
             f"Prepared Terraform to create the S3 bucket {bucket_name}. "
             "The bucket will be private by default."
         ),
-    }
+    )
