@@ -111,6 +111,7 @@ def continue_task(task_id: str, task_data: TaskContinue, db: Session = Depends(g
     )
     missing_inputs = discovery_state["missing_inputs"]
     explanation = discovery_state["explanation"]
+    notes = discovery_state["notes"]
 
     if missing_inputs:
         task.code_payload = _build_discovery_continuation_payload(
@@ -120,6 +121,7 @@ def continue_task(task_id: str, task_data: TaskContinue, db: Session = Depends(g
             provided_inputs=provided_inputs,
             missing_inputs=missing_inputs,
             explanation=explanation,
+            notes=notes,
         )
         task.status = map_task_status(task.code_payload)
         db.commit()
@@ -387,6 +389,7 @@ def _evaluate_discovery_state(
         "ready_to_execute": ready_to_execute,
         "explanation": explanation,
         "notes": validation["notes"],
+        "invalid_fields": validation["invalid_fields"],
     }
 
 
@@ -399,13 +402,24 @@ def _run_discovery_validations(
 ) -> dict[str, object]:
     invalid_fields: list[str] = []
     notes: list[str] = []
-    explanation: str | None = None
+    invalid_messages: list[str] = []
     validation_context = {**defaults, **provided_inputs}
 
     for field_name, validator_name in spec.get("validators", {}).items():
         value = provided_inputs.get(field_name)
         if not _has_value(value):
             continue
+
+        if field_name == "instance_type" and isinstance(value, str):
+            normalized_value = value.strip().lower()
+            if not INSTANCE_TYPE_PATTERN.fullmatch(normalized_value):
+                invalid_fields.append(field_name)
+                invalid_messages.append(
+                    f"The instance type '{value}' does not look valid."
+                )
+                notes.append("instance_type: provide a value like t3.micro.")
+                continue
+
         validator = CORE_TOOLS_BY_NAME.get(validator_name)
         if validator is None:
             continue
@@ -421,27 +435,42 @@ def _run_discovery_validations(
         notes.extend(str(note) for note in result.get("notes") or [])
         if validator_name == "validate_aws_region" and not result.get("valid", False):
             invalid_fields.append(field_name)
-            explanation = (
-                f"The region '{value}' does not look valid. "
-                "Provide an AWS region like us-east-1."
+            invalid_messages.append(
+                f"The region '{value}' does not look valid."
             )
+            notes.append("region: provide an AWS region like us-east-1.")
+            suggestions = result.get("suggestions") or []
+            if suggestions:
+                notes.append(f"region examples: {', '.join(suggestions[:5])}")
         if validator_name == "validate_ec2_instance_type":
             if not result.get("valid", False):
                 invalid_fields.append(field_name)
-                explanation = (
-                    f"The instance type '{value}' does not look valid. "
-                    "Provide a value like t3.micro."
+                invalid_messages.append(
+                    f"The instance type '{value}' does not look valid."
                 )
+                notes.append("instance_type: provide a value like t3.micro.")
             elif not result.get("available_in_region", False):
                 invalid_fields.append(field_name)
                 region = validation_context.get("region", "that region")
-                explanation = (
-                    f"The instance type '{value}' is not available in {region}. "
-                    "Choose another instance type or region."
+                invalid_messages.append(
+                    f"The instance type '{value}' is not available in {region}."
+                )
+                notes.append(
+                    f"instance_type: choose another type or a different region than {region}."
                 )
 
+    explanation: str | None = None
+    unique_invalid_fields = list(dict.fromkeys(invalid_fields))
+    if len(invalid_messages) == 1:
+        explanation = invalid_messages[0] + " Review the notes and provide a corrected value."
+    elif unique_invalid_fields:
+        explanation = (
+            "Some provided inputs are invalid: "
+            f"{', '.join(unique_invalid_fields)}. Review the notes and provide corrected values."
+        )
+
     return {
-        "invalid_fields": invalid_fields,
+        "invalid_fields": unique_invalid_fields,
         "notes": list(dict.fromkeys(notes)),
         "explanation": explanation,
     }
@@ -476,7 +505,7 @@ def _build_missing_input_explanation(
     missing_list = ", ".join(missing_inputs)
     if prompt:
         return (
-            f"The request '{prompt}' is missing: {missing_list}. "
+            f"The request '{prompt}' still needs valid values for: {missing_list}. "
             "Provide those values to continue."
         )
     return f"More input is required before {selected_tool} can continue: {missing_list}."
@@ -512,6 +541,7 @@ def _build_discovery_continuation_payload(
     provided_inputs: dict,
     missing_inputs: list[str],
     explanation: str,
+    notes: list[str],
 ) -> dict:
     return {
         "status": "needs_input",
@@ -530,7 +560,7 @@ def _build_discovery_continuation_payload(
         "precheck_tool": payload.get("precheck_tool") or spec.get("precheck_tool"),
         "files": [],
         "commands": [],
-        "notes": [],
+        "notes": notes,
         "requires_confirmation": False,
         "steps": [],
         "error": None,

@@ -111,10 +111,10 @@ def print_response_summary(response: dict[str, Any]) -> None:
         missing_inputs = code_payload.get("missing_inputs") or []
         if missing_inputs:
             print("missing_inputs: " + ", ".join(missing_inputs))
-        provided_inputs = code_payload.get("provided_inputs") or {}
-        if provided_inputs:
+        display_inputs = _build_discovery_display_inputs(code_payload)
+        if display_inputs:
             print("provided_inputs:")
-            for key, value in provided_inputs.items():
+            for key, value in display_inputs.items():
                 print(f"  - {key}: {value}")
     else:
         files = code_payload.get("files") or []
@@ -163,6 +163,31 @@ def print_response_summary(response: dict[str, Any]) -> None:
     if explanation:
         print("explanation:")
         print(f"  {explanation}")
+
+
+def _build_discovery_display_inputs(code_payload: dict[str, Any]) -> dict[str, Any]:
+    provided_inputs = code_payload.get("provided_inputs") or {}
+    defaults = code_payload.get("defaults") or {}
+    ordered_keys = []
+    for key in (
+        code_payload.get("required_inputs") or []
+    ) + (
+        code_payload.get("recommended_inputs") or []
+    ) + (
+        code_payload.get("optional_inputs") or []
+    ):
+        if key not in ordered_keys:
+            ordered_keys.append(key)
+
+    display_inputs: dict[str, Any] = {}
+    for key in ordered_keys:
+        if key in provided_inputs and provided_inputs[key] not in (None, ""):
+            display_inputs[key] = provided_inputs[key]
+        elif key in defaults:
+            display_inputs[key] = defaults[key]
+        else:
+            display_inputs[key] = "(missing)"
+    return display_inputs
 
 
 def prompt_for_missing_inputs(response: dict[str, Any]) -> dict[str, str]:

@@ -90,6 +90,39 @@ class CliHelperTests(unittest.TestCase):
         self.assertIn("notes:", output)
         self.assertIn("Try one of: us-east-1, us-west-2", output)
 
+    def test_discovery_summary_merges_defaults_into_display_inputs(self) -> None:
+        response = {
+            "task_id": "task-789",
+            "status": "collecting_input",
+            "code_payload": {
+                "status": "needs_input",
+                "mode": "discovery",
+                "selected_tool": "generate_ec2_terraform",
+                "required_inputs": ["instance_type"],
+                "recommended_inputs": ["region"],
+                "optional_inputs": ["instance_name"],
+                "defaults": {
+                    "region": "us-east-1",
+                    "instance_name": "infrapilot-ec2",
+                },
+                "provided_inputs": {
+                    "instance_type": "bad-type",
+                },
+                "missing_inputs": ["instance_type"],
+                "notes": ["instance_type: provide a value like t3.micro."],
+                "explanation": "The instance type 'bad-type' does not look valid.",
+            },
+        }
+
+        with patch("sys.stdout", new=StringIO()) as stdout:
+            print_response_summary(response)
+
+        output = stdout.getvalue()
+        self.assertIn("provided_inputs:", output)
+        self.assertIn("instance_type: bad-type", output)
+        self.assertIn("region: us-east-1", output)
+        self.assertIn("instance_name: infrapilot-ec2", output)
+
     @patch("builtins.input", side_effect=["cancel"])
     def test_prompt_for_missing_inputs_allows_cancel_keyword(self, _mock_input) -> None:
         response = {

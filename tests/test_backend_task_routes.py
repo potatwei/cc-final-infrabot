@@ -311,6 +311,73 @@ class BackendTaskRouteTests(unittest.TestCase):
 
     @patch.object(tasks_route, "Task", FakeTask)
     @patch.object(tasks_route, "build_graph")
+    def test_discovery_can_report_multiple_invalid_inputs_and_keep_valid_ones(
+        self,
+        mock_build_graph,
+    ) -> None:
+        class FakeGraph:
+            def invoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "final_payload": {
+                        "status": "success",
+                        "task_id": payload["task_id"],
+                        "mode": "discovery",
+                        "intent": "deploy_ec2_instance",
+                        "selected_tool": "generate_ec2_terraform",
+                        "provided_inputs": {
+                            "instance_type": "bad-type",
+                            "region": "east-1",
+                            "instance_name": "web-box",
+                        },
+                        "missing_inputs": [],
+                        "ready_to_execute": True,
+                        "precheck_tool": None,
+                        "files": [],
+                        "commands": [],
+                        "notes": [],
+                        "requires_confirmation": False,
+                        "steps": [],
+                        "error": None,
+                        "explanation": "Ready.",
+                    }
+                }
+
+        mock_build_graph.return_value = FakeGraph()
+
+        with patch.dict(
+            tasks_route.CORE_TOOLS_BY_NAME,
+            {
+                "validate_aws_region": FakeTool(
+                    {
+                        "status": "success",
+                        "intent": "validate_aws_region",
+                        "valid": False,
+                        "suggestions": ["us-east-1", "us-west-2"],
+                        "notes": [],
+                        "explanation": "invalid region",
+                    }
+                )
+            },
+            clear=False,
+        ):
+            response = self.client.post(
+                "/api/task",
+                json={"user_prompt": "build ec2", "mode": "discovery"},
+            )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("collecting_input", body["status"])
+        self.assertCountEqual(
+            ["instance_type", "region"],
+            body["code_payload"]["missing_inputs"],
+        )
+        self.assertEqual("web-box", body["code_payload"]["provided_inputs"]["instance_name"])
+        self.assertIn("instance_type: provide a value like t3.micro.", body["code_payload"]["notes"])
+        self.assertIn("region examples: us-east-1, us-west-2", body["code_payload"]["notes"])
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    @patch.object(tasks_route, "build_graph")
     def test_discovery_normalization_rejects_invalid_region(
         self,
         mock_build_graph,
