@@ -31,6 +31,7 @@ def create_task(task_data: TaskCreate, db: Session = Depends(get_db)):
             "messages": [HumanMessage(content=task_data.user_prompt)],
             "final_payload": {},
             "task_id": new_task.task_id,
+            "mode": task_data.mode,
         })
         payload = result["final_payload"]
         new_task.code_payload = payload
