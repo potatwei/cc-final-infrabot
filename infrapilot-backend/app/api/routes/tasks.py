@@ -40,8 +40,20 @@ def create_task(task_data: TaskCreate, db: Session = Depends(get_db)):
         new_task.status = "complete" if payload.get("status") == "success" else "failed"
 
     except Exception as e:
-        new_task.status = "failed"
-        new_task.code_payload = {"status": "error", "explanation": str(e)}
+    new_task.status = "failed"
+    new_task.code_payload = {
+        "status": "error",
+        "task_id": new_task.task_id,
+        "intent": None,
+        "files": [],
+        "commands": [],
+        "notes": [],
+        "requires_confirmation": False,
+        "steps": [],
+        "error": str(e),
+        "missing_parameters": [],
+        "explanation": str(e)
+    }
 
     db.commit()
     db.refresh(new_task)
