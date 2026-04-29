@@ -118,6 +118,29 @@ def print_response_summary(response: dict[str, Any]) -> None:
     else:
         files = code_payload.get("files") or []
         commands = code_payload.get("commands") or []
+        regions = code_payload.get("regions") or []
+        instance_types = code_payload.get("instance_types") or []
+        suggestions = code_payload.get("suggestions") or []
+        if "valid" in code_payload:
+            print(f"valid: {code_payload.get('valid')}")
+        if "available_in_region" in code_payload:
+            print(f"available_in_region: {code_payload.get('available_in_region')}")
+        if regions:
+            print("regions:")
+            for region in regions[:10]:
+                print(f"  - {region}")
+            if len(regions) > 10:
+                print(f"  - ... ({len(regions)} total)")
+        if instance_types:
+            print("instance_types:")
+            for instance_type in instance_types[:10]:
+                print(f"  - {instance_type}")
+            if len(instance_types) > 10:
+                print(f"  - ... ({len(instance_types)} total)")
+        if suggestions:
+            print("suggestions:")
+            for suggestion in suggestions[:10]:
+                print(f"  - {suggestion}")
         if files:
             print("files:")
             for entry in files:

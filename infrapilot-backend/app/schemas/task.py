@@ -40,6 +40,9 @@ class CodePayload(BaseModel):
     missing_parameters: List[str] = []
     explanation: str
 
+    class Config:
+        extra = "allow"
+
 
 class TaskCreate(BaseModel):
     user_prompt: str

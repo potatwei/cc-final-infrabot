@@ -360,6 +360,137 @@ class BackendTaskRouteTests(unittest.TestCase):
 
     @patch.object(tasks_route, "Task", FakeTask)
     @patch.object(tasks_route, "build_graph")
+    def test_discovery_executes_list_regions_lookup_immediately(
+        self,
+        mock_build_graph,
+    ) -> None:
+        class FakeGraph:
+            def invoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "final_payload": {
+                        "status": "success",
+                        "task_id": payload["task_id"],
+                        "mode": "discovery",
+                        "intent": "list_aws_regions",
+                        "selected_tool": "list_aws_regions",
+                        "provided_inputs": {},
+                        "missing_inputs": [],
+                        "ready_to_execute": True,
+                        "precheck_tool": None,
+                        "files": [],
+                        "commands": [],
+                        "notes": [],
+                        "requires_confirmation": False,
+                        "steps": [],
+                        "error": None,
+                        "explanation": "Ready.",
+                    }
+                }
+
+        mock_build_graph.return_value = FakeGraph()
+
+        with patch.dict(
+            tasks_route.CORE_TOOLS_BY_NAME,
+            {
+                "list_aws_regions": FakeTool(
+                    {
+                        "status": "success",
+                        "intent": "list_aws_regions",
+                        "regions": ["us-east-1", "us-west-2"],
+                        "notes": ["Found 2 enabled regions."],
+                        "files": [],
+                        "commands": [],
+                        "requires_confirmation": False,
+                        "steps": [],
+                        "error": None,
+                        "missing_parameters": [],
+                        "explanation": "Available AWS regions include: us-east-1, us-west-2",
+                    }
+                )
+            },
+            clear=False,
+        ):
+            response = self.client.post(
+                "/api/task",
+                json={"user_prompt": "what aws regions are available", "mode": "discovery"},
+            )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("planned", body["status"])
+        self.assertEqual("success", body["code_payload"]["status"])
+        self.assertEqual(["us-east-1", "us-west-2"], body["code_payload"]["regions"])
+        self.assertIn("Available AWS regions include", body["code_payload"]["explanation"])
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    @patch.object(tasks_route, "build_graph")
+    def test_discovery_routes_bucket_availability_prompt_to_precheck_tool(
+        self,
+        mock_build_graph,
+    ) -> None:
+        class FakeGraph:
+            def invoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "final_payload": {
+                        "status": "needs_input",
+                        "task_id": payload["task_id"],
+                        "mode": "discovery",
+                        "intent": "deploy_s3_bucket",
+                        "selected_tool": None,
+                        "provided_inputs": {},
+                        "missing_inputs": [],
+                        "ready_to_execute": False,
+                        "precheck_tool": None,
+                        "files": [],
+                        "commands": [],
+                        "notes": [],
+                        "requires_confirmation": False,
+                        "steps": [],
+                        "error": None,
+                        "explanation": "Need more detail.",
+                    }
+                }
+
+        mock_build_graph.return_value = FakeGraph()
+
+        with patch.dict(
+            tasks_route.CORE_TOOLS_BY_NAME,
+            {
+                "check_s3_name_availability": FakeTool(
+                    {
+                        "status": "success",
+                        "intent": "check_s3_name_availability",
+                        "available": True,
+                        "bucket_name": "demo-bucket-unique-name",
+                        "notes": ["The bucket name is currently available."],
+                        "files": [],
+                        "commands": [],
+                        "requires_confirmation": False,
+                        "steps": [],
+                        "error": None,
+                        "missing_parameters": [],
+                        "explanation": "The bucket name demo-bucket-unique-name is available.",
+                    }
+                )
+            },
+            clear=False,
+        ):
+            response = self.client.post(
+                "/api/task",
+                json={
+                    "user_prompt": "check whether bucket named demo-bucket-unique-name is available",
+                    "mode": "discovery",
+                },
+            )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("planned", body["status"])
+        self.assertEqual("check_s3_name_availability", body["code_payload"]["intent"])
+        self.assertTrue(body["code_payload"]["available"])
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    @patch.object(tasks_route, "build_graph")
     def test_post_task_execution_mode_returns_awaiting_confirmation(
         self,
         mock_build_graph,

@@ -15,6 +15,13 @@ from app.schemas.task import TaskContinue, TaskCreate, TaskResponse
 from tools import CORE_TOOL_INPUT_SPECS, CORE_TOOLS_BY_NAME
 
 router = APIRouter()
+IMMEDIATE_DISCOVERY_TOOLS = {
+    "check_s3_name_availability",
+    "list_aws_regions",
+    "validate_aws_region",
+    "list_ec2_instance_type_offerings",
+    "validate_ec2_instance_type",
+}
 
 
 @router.post("/task", response_model=TaskResponse)
@@ -38,6 +45,8 @@ def create_task(task_data: TaskCreate, db: Session = Depends(get_db)):
         payload = result["final_payload"]
         if task_data.mode == "discovery":
             payload = _normalize_discovery_payload(payload=payload, prompt=task_data.user_prompt)
+            if _should_execute_immediately_in_discovery(payload):
+                payload = _execute_selected_tool_from_discovery(payload, task_id=new_task.task_id)
         new_task.code_payload = payload
         new_task.status = map_task_status(payload)
 
@@ -270,6 +279,7 @@ def _infer_selected_tool_from_prompt(prompt: str) -> str | None:
     normalized = prompt.strip().lower()
     has_region = bool(_extract_region(prompt))
     has_instance_type = bool(_extract_instance_type(prompt))
+    has_bucket_name = bool(_extract_bucket_name(prompt))
 
     if "region" in normalized and any(word in normalized for word in ("list", "available", "which", "what")):
         if has_region and ("valid" in normalized or "is " in normalized):
@@ -280,6 +290,8 @@ def _infer_selected_tool_from_prompt(prompt: str) -> str | None:
             return "validate_ec2_instance_type"
         if has_region and any(word in normalized for word in ("list", "available", "which", "what")):
             return "list_ec2_instance_type_offerings"
+    if has_bucket_name and any(word in normalized for word in ("available", "availability", "valid")):
+        return "check_s3_name_availability"
     if "s3" in normalized or "bucket" in normalized:
         return "generate_s3_terraform"
     if "ec2" in normalized or "instance" in normalized:
@@ -577,6 +589,29 @@ def _run_precheck_if_needed(*, spec: dict, provided_inputs: dict) -> dict | None
     if precheck_tool is None:
         raise HTTPException(status_code=500, detail="Configured precheck tool is unavailable.")
     return precheck_tool.invoke(_build_precheck_inputs(provided_inputs))
+
+
+def _should_execute_immediately_in_discovery(payload: dict) -> bool:
+    if payload.get("mode") != "discovery":
+        return False
+    if payload.get("ready_to_execute") is not True:
+        return False
+    selected_tool = payload.get("selected_tool")
+    return isinstance(selected_tool, str) and selected_tool in IMMEDIATE_DISCOVERY_TOOLS
+
+
+def _execute_selected_tool_from_discovery(payload: dict, *, task_id: str) -> dict:
+    selected_tool = payload["selected_tool"]
+    spec = CORE_TOOL_INPUT_SPECS[selected_tool]
+    tool = CORE_TOOLS_BY_NAME[selected_tool]
+    tool_inputs = _build_tool_inputs(
+        spec=spec,
+        provided_inputs=dict(payload.get("provided_inputs") or {}),
+        defaults=dict(payload.get("defaults") or spec["defaults"]),
+    )
+    tool_result = tool.invoke(tool_inputs)
+    tool_result["task_id"] = task_id
+    return tool_result
 
 
 REGION_PATTERN = re.compile(r"\b[a-z]{2}-[a-z]+-\d+\b")
