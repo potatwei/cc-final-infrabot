@@ -52,6 +52,7 @@ class TaskCreate(BaseModel):
 class TaskContinue(BaseModel):
     user_input: Optional[str] = None
     provided_inputs: dict = Field(default_factory=dict)
+    execute: bool = False
 
 
 class TaskResponse(BaseModel):

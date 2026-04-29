@@ -758,12 +758,12 @@ class BackendTaskRouteTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         body = response.json()
-        self.assertEqual("awaiting_confirmation", body["status"])
+        self.assertEqual("ready_to_execute", body["status"])
         self.assertEqual("success", body["code_payload"]["status"])
-        self.assertEqual("deploy_ec2_instance", body["code_payload"]["intent"])
+        self.assertEqual("discovery", body["code_payload"]["mode"])
         self.assertEqual("task-continue-2", body["code_payload"]["task_id"])
-        self.assertEqual(1, len(body["code_payload"]["files"]))
-        self.assertEqual(2, len(body["code_payload"]["commands"]))
+        self.assertEqual([], body["code_payload"]["missing_inputs"])
+        self.assertTrue(body["code_payload"]["ready_to_execute"])
 
     @patch.object(tasks_route, "Task", FakeTask)
     def test_continue_task_uses_raw_user_input_for_first_missing_field(self) -> None:
@@ -804,8 +804,150 @@ class BackendTaskRouteTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         body = response.json()
-        self.assertEqual("awaiting_confirmation", body["status"])
+        self.assertEqual("ready_to_execute", body["status"])
         self.assertEqual("task-continue-3", body["code_payload"]["task_id"])
+        self.assertEqual("t3.micro", body["code_payload"]["provided_inputs"]["instance_type"])
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    def test_continue_task_execute_flag_runs_execution_tool(self) -> None:
+        existing_task = FakeTask(
+            user_prompt="Create an EC2 instance in us-east-1",
+            status="ready_to_execute",
+            code_payload={
+                "status": "success",
+                "task_id": "task-continue-4",
+                "mode": "discovery",
+                "intent": "deploy_ec2_instance",
+                "selected_tool": "generate_ec2_terraform",
+                "required_inputs": ["instance_type"],
+                "recommended_inputs": ["region"],
+                "optional_inputs": ["instance_name", "vpc_cidr", "public_subnet_cidr"],
+                "defaults": {
+                    "region": "us-east-1",
+                    "instance_name": "infrapilot-ec2",
+                    "vpc_cidr": "10.50.0.0/16",
+                    "public_subnet_cidr": "10.50.1.0/24",
+                },
+                "provided_inputs": {"instance_type": "t3.micro", "region": "us-east-1"},
+                "missing_inputs": [],
+                "missing_parameters": [],
+                "ready_to_execute": True,
+                "precheck_tool": None,
+                "files": [],
+                "commands": [],
+                "notes": [],
+                "requires_confirmation": False,
+                "steps": [],
+                "error": None,
+                "explanation": "Ready.",
+            },
+            task_id="task-continue-4",
+        )
+        self.fake_db.add(existing_task)
+
+        response = self.client.post(
+            "/api/task/task-continue-4/continue",
+            json={"execute": True},
+        )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("awaiting_confirmation", body["status"])
+        self.assertEqual("success", body["code_payload"]["status"])
+        self.assertEqual("deploy_ec2_instance", body["code_payload"]["intent"])
+        self.assertEqual("task-continue-4", body["code_payload"]["task_id"])
+        self.assertEqual(1, len(body["code_payload"]["files"]))
+        self.assertEqual(2, len(body["code_payload"]["commands"]))
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    def test_continue_task_parses_multiple_field_updates(self) -> None:
+        existing_task = FakeTask(
+            user_prompt="Create an EC2 instance in us-east-1",
+            status="ready_to_execute",
+            code_payload={
+                "status": "success",
+                "task_id": "task-continue-5",
+                "mode": "discovery",
+                "intent": "deploy_ec2_instance",
+                "selected_tool": "generate_ec2_terraform",
+                "required_inputs": ["instance_type"],
+                "recommended_inputs": ["region"],
+                "optional_inputs": ["instance_name", "vpc_cidr", "public_subnet_cidr"],
+                "defaults": {
+                    "region": "us-east-1",
+                    "instance_name": "infrapilot-ec2",
+                    "vpc_cidr": "10.50.0.0/16",
+                    "public_subnet_cidr": "10.50.1.0/24",
+                },
+                "provided_inputs": {"instance_type": "t3.micro", "region": "us-east-1"},
+                "missing_inputs": [],
+                "missing_parameters": [],
+                "ready_to_execute": True,
+                "precheck_tool": None,
+                "files": [],
+                "commands": [],
+                "notes": [],
+                "requires_confirmation": False,
+                "steps": [],
+                "error": None,
+                "explanation": "Ready.",
+            },
+            task_id="task-continue-5",
+        )
+        self.fake_db.add(existing_task)
+
+        response = self.client.post(
+            "/api/task/task-continue-5/continue",
+            json={"user_input": "instance_type: t3.small, region: us-east-2"},
+        )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("ready_to_execute", body["status"])
+        self.assertEqual("t3.small", body["code_payload"]["provided_inputs"]["instance_type"])
+        self.assertEqual("us-east-2", body["code_payload"]["provided_inputs"]["region"])
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    def test_continue_task_parses_change_to_syntax(self) -> None:
+        existing_task = FakeTask(
+            user_prompt="Create an EC2 instance in us-east-1",
+            status="ready_to_execute",
+            code_payload={
+                "status": "success",
+                "task_id": "task-continue-6",
+                "mode": "discovery",
+                "intent": "deploy_ec2_instance",
+                "selected_tool": "generate_ec2_terraform",
+                "required_inputs": ["instance_type"],
+                "recommended_inputs": ["region"],
+                "optional_inputs": ["instance_name", "vpc_cidr", "public_subnet_cidr"],
+                "defaults": {"region": "us-east-1"},
+                "provided_inputs": {"instance_type": "t3.micro", "region": "us-east-1"},
+                "missing_inputs": [],
+                "missing_parameters": [],
+                "ready_to_execute": True,
+                "precheck_tool": None,
+                "files": [],
+                "commands": [],
+                "notes": [],
+                "requires_confirmation": False,
+                "steps": [],
+                "error": None,
+                "explanation": "Ready.",
+            },
+            task_id="task-continue-6",
+        )
+        self.fake_db.add(existing_task)
+
+        response = self.client.post(
+            "/api/task/task-continue-6/continue",
+            json={"user_input": "region change to us-east-2"},
+        )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("ready_to_execute", body["status"])
+        self.assertEqual("us-east-2", body["code_payload"]["provided_inputs"]["region"])
 
 
 if __name__ == "__main__":

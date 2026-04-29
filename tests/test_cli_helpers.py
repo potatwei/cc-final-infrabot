@@ -9,7 +9,7 @@ from unittest.mock import patch
 from infrapilot_cli import (
     determine_next_step,
     print_response_summary,
-    prompt_for_missing_inputs,
+    prompt_for_discovery_input,
     run_chat,
 )
 
@@ -20,22 +20,24 @@ class CliHelperTests(unittest.TestCase):
             "status": "collecting_input",
             "code_payload": {
                 "status": "needs_input",
+                "mode": "discovery",
                 "missing_inputs": ["instance_type"],
             },
         }
 
-        self.assertEqual("collect_input", determine_next_step(response))
+        self.assertEqual("review", determine_next_step(response))
 
-    def test_ready_to_execute_maps_to_execute(self) -> None:
+    def test_ready_to_execute_maps_to_review(self) -> None:
         response = {
             "status": "ready_to_execute",
             "code_payload": {
                 "status": "success",
+                "mode": "discovery",
                 "ready_to_execute": True,
             },
         }
 
-        self.assertEqual("execute", determine_next_step(response))
+        self.assertEqual("review", determine_next_step(response))
 
     def test_awaiting_confirmation_maps_to_done(self) -> None:
         response = {
@@ -124,15 +126,27 @@ class CliHelperTests(unittest.TestCase):
         self.assertIn("instance_name: infrapilot-ec2", output)
 
     @patch("builtins.input", side_effect=["cancel"])
-    def test_prompt_for_missing_inputs_allows_cancel_keyword(self, _mock_input) -> None:
+    def test_prompt_for_discovery_input_allows_cancel_keyword(self, _mock_input) -> None:
         response = {
             "code_payload": {
+                "mode": "discovery",
                 "missing_inputs": ["bucket_name"],
             }
         }
 
         with self.assertRaises(KeyboardInterrupt):
-            prompt_for_missing_inputs(response)
+            prompt_for_discovery_input(response)
+
+    @patch("builtins.input", side_effect=["confirm"])
+    def test_prompt_for_discovery_input_accepts_confirm(self, _mock_input) -> None:
+        response = {
+            "code_payload": {
+                "mode": "discovery",
+                "ready_to_execute": True,
+            }
+        }
+
+        self.assertEqual(("confirm", None), prompt_for_discovery_input(response))
 
     @patch("infrapilot_cli.run_deploy", return_value=0)
     @patch("builtins.input", side_effect=["Create a VPC in us-east-1", "exit"])

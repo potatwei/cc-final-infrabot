@@ -61,12 +61,15 @@ def continue_task(
     base_url: str,
     provided_inputs: dict[str, str] | None = None,
     user_input: str | None = None,
+    execute: bool = False,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if provided_inputs:
         payload["provided_inputs"] = provided_inputs
     if user_input:
         payload["user_input"] = user_input
+    if execute:
+        payload["execute"] = True
     return api_request(
         method="POST",
         path=f"/api/task/{task_id}/continue",
@@ -87,10 +90,10 @@ def determine_next_step(response: dict[str, Any]) -> str:
     """Classify the next CLI action from a backend task payload."""
     task_status = response.get("status")
     code_payload = response.get("code_payload") or {}
+    if code_payload.get("mode") == "discovery":
+        return "review"
     if task_status == "collecting_input":
         return "collect_input"
-    if task_status == "ready_to_execute" or code_payload.get("ready_to_execute") is True:
-        return "execute"
     if task_status in {"awaiting_confirmation", "planned", "complete"}:
         return "done"
     if task_status == "failed":
@@ -190,18 +193,23 @@ def _build_discovery_display_inputs(code_payload: dict[str, Any]) -> dict[str, A
     return display_inputs
 
 
-def prompt_for_missing_inputs(response: dict[str, Any]) -> dict[str, str]:
-    """Prompt once for every missing field on a collecting_input task."""
+def prompt_for_discovery_input(response: dict[str, Any]) -> tuple[str, str | None]:
+    """Read one free-form review/update command from the user."""
     code_payload = response.get("code_payload") or {}
-    updates: dict[str, str] = {}
-    for field_name in code_payload.get("missing_inputs") or []:
-        value = input(f"{field_name}: ").strip()
-        if not value:
-            raise KeyboardInterrupt(f"No value provided for {field_name}.")
-        if value.lower() in {"exit", "quit", "cancel"}:
-            raise KeyboardInterrupt(f"Input collection cancelled at {field_name}.")
-        updates[field_name] = value
-    return updates
+    if code_payload.get("ready_to_execute"):
+        prompt = "review> type 'confirm' to generate the plan, or enter updates: "
+    else:
+        prompt = "review> enter updates like 'instance_type: t3.micro' (or 'cancel'): "
+
+    value = input(prompt).strip()
+    if not value:
+        raise KeyboardInterrupt("No review input provided.")
+    normalized = value.lower()
+    if normalized in {"exit", "quit", "cancel"}:
+        raise KeyboardInterrupt("Review cancelled.")
+    if normalized == "confirm":
+        return ("confirm", None)
+    return ("update", value)
 
 
 def run_deploy(prompt: str, *, base_url: str, auto_confirm: bool = False) -> int:
@@ -212,17 +220,24 @@ def run_deploy(prompt: str, *, base_url: str, auto_confirm: bool = False) -> int
         print_response_summary(response)
         next_step = determine_next_step(response)
 
-        if next_step == "collect_input":
-            updates = prompt_for_missing_inputs(response)
-            response = continue_task(
-                response["task_id"],
-                base_url=base_url,
-                provided_inputs=updates,
-            )
-            continue
-
-        if next_step == "execute":
-            response = continue_task(response["task_id"], base_url=base_url)
+        if next_step == "review":
+            if auto_confirm and response.get("code_payload", {}).get("ready_to_execute"):
+                action = "confirm"
+                user_value = None
+            else:
+                action, user_value = prompt_for_discovery_input(response)
+            if action == "confirm":
+                response = continue_task(
+                    response["task_id"],
+                    base_url=base_url,
+                    execute=True,
+                )
+            else:
+                response = continue_task(
+                    response["task_id"],
+                    base_url=base_url,
+                    user_input=user_value,
+                )
             continue
 
         if next_step == "error":

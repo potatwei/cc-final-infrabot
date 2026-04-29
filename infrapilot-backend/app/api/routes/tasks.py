@@ -97,9 +97,17 @@ def continue_task(task_id: str, task_data: TaskContinue, db: Session = Depends(g
         if _has_value(value)
     }
     if task_data.user_input and not new_inputs:
-        first_missing = _first_missing_input(payload)
-        if first_missing:
-            new_inputs[first_missing] = task_data.user_input.strip()
+        new_inputs.update(
+            _parse_discovery_user_input(
+                user_input=task_data.user_input,
+                spec=spec,
+                payload=payload,
+            )
+        )
+        if not new_inputs:
+            first_missing = _first_missing_input(payload)
+            if first_missing:
+                new_inputs[first_missing] = task_data.user_input.strip()
 
     provided_inputs.update(new_inputs)
     discovery_state = _evaluate_discovery_state(
@@ -113,8 +121,8 @@ def continue_task(task_id: str, task_data: TaskContinue, db: Session = Depends(g
     explanation = discovery_state["explanation"]
     notes = discovery_state["notes"]
 
-    if missing_inputs:
-        task.code_payload = _build_discovery_continuation_payload(
+    if missing_inputs or not task_data.execute:
+        task.code_payload = _build_discovery_review_payload(
             task_id=task.task_id,
             payload=payload,
             spec=spec,
@@ -122,6 +130,7 @@ def continue_task(task_id: str, task_data: TaskContinue, db: Session = Depends(g
             missing_inputs=missing_inputs,
             explanation=explanation,
             notes=notes,
+            ready_to_execute=not missing_inputs,
         )
         task.status = map_task_status(task.code_payload)
         db.commit()
@@ -191,6 +200,38 @@ def _first_missing_input(payload: dict) -> str | None:
             if isinstance(item, str) and item:
                 return item
     return None
+
+
+def _parse_discovery_user_input(*, user_input: str, spec: dict, payload: dict) -> dict[str, str]:
+    allowed_fields = list(
+        dict.fromkeys(
+            spec["required_inputs"] + spec["recommended_inputs"] + spec["optional_inputs"]
+        )
+    )
+    if not allowed_fields:
+        return {}
+
+    field_pattern = "|".join(sorted((re.escape(field) for field in allowed_fields), key=len, reverse=True))
+    updates: dict[str, str] = {}
+    segments = [segment.strip() for segment in re.split(r"[,\n;]+", user_input) if segment.strip()]
+
+    for segment in segments:
+        colon_match = re.match(rf"^({field_pattern})\s*[:=]\s*(.+)$", segment, flags=re.IGNORECASE)
+        change_match = re.match(
+            rf"^({field_pattern})\s+(?:change|set|update)\s+to\s+(.+)$",
+            segment,
+            flags=re.IGNORECASE,
+        )
+        direct_match = re.match(rf"^({field_pattern})\s+to\s+(.+)$", segment, flags=re.IGNORECASE)
+        match = colon_match or change_match or direct_match
+        if not match:
+            continue
+        field_name = match.group(1).lower()
+        field_value = match.group(2).strip()
+        if field_value:
+            updates[field_name] = field_value
+
+    return updates
 
 
 def _compute_missing_inputs(
@@ -533,7 +574,7 @@ def _build_ready_to_execute_explanation(
     return f"All required inputs are available for {selected_tool}."
 
 
-def _build_discovery_continuation_payload(
+def _build_discovery_review_payload(
     *,
     task_id: str,
     payload: dict,
@@ -542,9 +583,10 @@ def _build_discovery_continuation_payload(
     missing_inputs: list[str],
     explanation: str,
     notes: list[str],
+    ready_to_execute: bool,
 ) -> dict:
     return {
-        "status": "needs_input",
+        "status": "success" if ready_to_execute else "needs_input",
         "task_id": task_id,
         "mode": "discovery",
         "intent": payload.get("intent") or spec["intent"],
@@ -556,7 +598,7 @@ def _build_discovery_continuation_payload(
         "provided_inputs": provided_inputs,
         "missing_inputs": missing_inputs,
         "missing_parameters": missing_inputs,
-        "ready_to_execute": False,
+        "ready_to_execute": ready_to_execute,
         "precheck_tool": payload.get("precheck_tool") or spec.get("precheck_tool"),
         "files": [],
         "commands": [],
