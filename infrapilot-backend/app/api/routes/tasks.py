@@ -4,7 +4,6 @@ from langchain_core.messages import HumanMessage
 import sys
 import os
 
-# This lets your FastAPI app find the agents/ and tools/ folders
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../../../'))
 
 from agents.bedrock_graph import build_graph
@@ -17,7 +16,6 @@ router = APIRouter()
 
 @router.post("/task", response_model=TaskResponse)
 def create_task(task_data: TaskCreate, db: Session = Depends(get_db)):
-    # 1. Save task to DB immediately
     new_task = Task(
         user_prompt=task_data.user_prompt,
         status="pending",
@@ -27,33 +25,30 @@ def create_task(task_data: TaskCreate, db: Session = Depends(get_db)):
     db.commit()
 
     try:
-        # 2. Call Person B's agent
         graph = build_graph()
         result = graph.invoke({
             "messages": [HumanMessage(content=task_data.user_prompt)],
             "final_payload": {}
         })
-
-        # 3. Extract the payload and save it
         payload = result["final_payload"]
         new_task.code_payload = payload
         new_task.status = "complete" if payload.get("status") == "success" else "failed"
 
     except Exception as e:
-    new_task.status = "failed"
-    new_task.code_payload = {
-        "status": "error",
-        "task_id": new_task.task_id,
-        "intent": None,
-        "files": [],
-        "commands": [],
-        "notes": [],
-        "requires_confirmation": False,
-        "steps": [],
-        "error": str(e),
-        "missing_parameters": [],
-        "explanation": str(e)
-    }
+        new_task.status = "failed"
+        new_task.code_payload = {
+            "status": "error",
+            "task_id": new_task.task_id,
+            "intent": None,
+            "files": [],
+            "commands": [],
+            "notes": [],
+            "requires_confirmation": False,
+            "steps": [],
+            "error": str(e),
+            "missing_parameters": [],
+            "explanation": str(e)
+        }
 
     db.commit()
     db.refresh(new_task)
