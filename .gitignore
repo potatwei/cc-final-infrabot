@@ -27,3 +27,8 @@ __pycache__/
 *.py[cod]
 .venv/
 .venv*/
+package/
+package-linux/
+lambda_package.zip
+lambda_package_linux.zip
+.env
