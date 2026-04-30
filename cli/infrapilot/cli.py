@@ -7,7 +7,7 @@ executed locally — the backend owns all infrastructure work.
 
 import click
 
-from . import api, config, display
+from . import api, config, display, lookups
 
 
 @click.group()
@@ -26,6 +26,43 @@ def set_config(api_url: str, api_key: str) -> None:
     cfg["api_key"] = api_key
     config.save_user_config(cfg)
     display.success(f"Saved {config.USER_CONFIG}")
+
+
+@main.group()
+def lookup() -> None:
+    """Look up valid AWS values to paste into prompts."""
+
+
+@lookup.command("regions")
+def lookup_regions() -> None:
+    """List common AWS regions."""
+    for code, name in lookups.REGIONS:
+        click.echo(f"  {code:<18} {name}")
+
+
+@lookup.command("instance-types")
+@click.argument("family", required=False)
+def lookup_instance_types(family: str | None) -> None:
+    """List EC2 instance types. Optionally filter by FAMILY (e.g. t3, m5)."""
+    rows = lookups.INSTANCE_TYPES
+    if family:
+        prefix = f"{family.lower()}."
+        rows = [r for r in rows if r[0].lower().startswith(prefix)]
+        if not rows:
+            click.echo(f"  no types matched '{family}'")
+            click.echo("  try one of:")
+            for fam, descr in lookups.INSTANCE_FAMILIES:
+                click.echo(f"    {fam:<5} {descr}")
+            return
+    for code, descr in rows:
+        click.echo(f"  {code:<14} {descr}")
+
+
+@lookup.command("families")
+def lookup_families() -> None:
+    """List EC2 instance families with short descriptions."""
+    for fam, descr in lookups.INSTANCE_FAMILIES:
+        click.echo(f"  {fam:<5} {descr}")
 
 
 @main.command()
@@ -84,7 +121,10 @@ def _drive_task(client, payload: dict, original_prompt: str = "",
                 recommended = set(payload.get("recommended_inputs") or [])
                 optional = set(payload.get("optional_inputs") or [])
                 defaults = payload.get("defaults") or {}
-                display.info("  Please provide (Enter to accept default):")
+                display.info(
+                    "  Please provide (Enter to accept default; "
+                    "see `infrapilot lookup --help` for valid values):"
+                )
                 for name in missing:
                     if name in required:
                         cls = "required"
