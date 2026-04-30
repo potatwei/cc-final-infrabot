@@ -61,24 +61,77 @@ def chat() -> None:
             display.failure(f"Request failed: {e}")
             continue
 
-        if payload.get("status") != "success":
-            display.failure(payload.get("message", "Backend returned an error."))
+        _drive_task(client, payload)
+
+
+def _drive_task(client, payload: dict, max_turns: int = 8) -> None:
+    """Run the multi-turn lifecycle for one user prompt."""
+    user_approved = False
+    for _ in range(max_turns):
+        display.show_payload(payload)
+        status = (payload.get("status") or "").lower()
+        task_id = payload["task_id"]
+
+        if status == "needs_input":
+            missing = (payload.get("missing_parameters")
+                       or payload.get("missing_inputs")
+                       or [])
+            provided: dict = {}
+            free = ""
+            if missing:
+                display.info("  Please provide:")
+                for name in missing:
+                    val = click.prompt(f"    {name}", default="", show_default=False)
+                    if val.strip():
+                        provided[name.strip()] = val.strip()
+            else:
+                free = click.prompt("  More detail", default="", show_default=False)
+                if not free.strip():
+                    return
+            try:
+                payload = client.continue_task(
+                    task_id,
+                    user_input=None if missing else free,
+                    provided_inputs=provided,
+                    execute=False,
+                )
+            except Exception as e:
+                display.failure(f"Continue failed: {e}")
+                return
             continue
 
-        display.show_payload(payload)
+        if status in ("awaiting_confirmation", "planned"):
+            if not display.confirm("Execute this plan?"):
+                display.info("  Execution declined.")
+                return
+            user_approved = True
+            try:
+                payload = client.continue_task(task_id, execute=True)
+            except Exception as e:
+                display.failure(f"Execute failed: {e}")
+                return
+            continue
 
-        requires_confirm = (payload.get("metadata") or {}).get("requires_confirmation", True)
-        approved = True
-        if requires_confirm:
+        if status in ("failed", "error"):
+            return
+
+        # success / complete / anything else with content → /confirm to mark done.
+        # If we never went through awaiting_confirmation (e.g. offline FakeClient),
+        # ask the user once before marking complete.
+        approved = user_approved
+        if not approved:
+            if not (payload.get("commands") or payload.get("files")):
+                return
             approved = display.confirm()
-
         try:
-            result = client.confirm(payload["task_id"], approved)
+            result = client.confirm(task_id, approved=approved)
         except Exception as e:
             display.failure(f"Confirmation failed: {e}")
-            continue
-
+            return
         display.show_result(result)
+        return
+
+    display.failure("  Too many turns; aborting this task.")
 
 
 if __name__ == "__main__":
