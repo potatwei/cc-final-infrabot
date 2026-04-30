@@ -79,9 +79,27 @@ def _drive_task(client, payload: dict, max_turns: int = 8) -> None:
             provided: dict = {}
             free = ""
             if missing:
-                display.info("  Please provide:")
+                required = set(payload.get("required_inputs") or [])
+                recommended = set(payload.get("recommended_inputs") or [])
+                optional = set(payload.get("optional_inputs") or [])
+                defaults = payload.get("defaults") or {}
+                display.info("  Please provide (Enter to accept default):")
                 for name in missing:
-                    val = click.prompt(f"    {name}", default="", show_default=False)
+                    if name in required:
+                        cls = "required"
+                    elif name in recommended:
+                        cls = "recommended"
+                    elif name in optional:
+                        cls = "optional"
+                    else:
+                        cls = None
+                    default = defaults.get(name)
+                    label = display.build_prompt_label(name, cls, default)
+                    val = click.prompt(
+                        label,
+                        default=str(default) if default is not None else "",
+                        show_default=False,
+                    )
                     if val.strip():
                         provided[name.strip()] = val.strip()
             else:

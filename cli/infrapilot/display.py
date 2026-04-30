@@ -4,6 +4,69 @@ import shutil
 import textwrap
 
 
+# Built-in hints for common AWS / Fargate inputs. Backend may not ship these,
+# so we keep a small lookup table to surface options at the prompt.
+INPUT_HINTS = {
+    "region":                  "e.g. us-east-1, us-west-2, eu-west-1",
+    "aws_region":              "e.g. us-east-1, us-west-2, eu-west-1",
+    "project_name":            "alphanumeric, e.g. my-project",
+    "instance_type":           "e.g. t3.micro, t3.small, t3.medium, m5.large",
+    "vpc_id":                  "vpc-xxxxxxxx (from setup_infra outputs)",
+    "subnet_id":               "subnet-xxxxxxxx",
+    "subnet_ids":              "comma-separated, e.g. subnet-aaa,subnet-bbb",
+    "private_subnet_ids":      "comma-separated subnet ids",
+    "public_subnet_ids":       "comma-separated subnet ids",
+    "cluster_name":            "your ECS cluster name",
+    "ecs_cluster_name":        "your ECS cluster name",
+    "cluster_arn":             "arn:aws:ecs:...:cluster/...",
+    "service_name":            "name of the ECS service",
+    "container_name":          "container in the task definition",
+    "container_port":          "port the app listens on, e.g. 3000",
+    "port":                    "port number, e.g. 3000, 8080, 80",
+    "image_uri":               "ECR URI, e.g. <acct>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>",
+    "image":                   "ECR URI or docker image, e.g. nginx:latest",
+    "ecr_url":                 "ECR repository URL",
+    "ecr_repository_url":      "ECR repository URL",
+    "alb_listener_arn":        "arn:aws:elasticloadbalancing:...:listener/...",
+    "alb_security_group_id":   "sg-xxxxxxxx",
+    "ecs_task_security_group_id": "sg-xxxxxxxx",
+    "ecs_task_sg_id":          "sg-xxxxxxxx",
+    "cpu":                     "Fargate CPU units: 256, 512, 1024, 2048, 4096",
+    "memory":                  "Fargate memory MiB: 512, 1024, 2048, 4096, 8192",
+    "replicas":                "desired task count, e.g. 1-10",
+    "desired_count":           "desired task count, e.g. 1-10",
+    "health_check_path":       "HTTP path, e.g. /health",
+    "ecs_task_execution_role_arn": "arn:aws:iam::...:role/...",
+    "domain":                  "fully-qualified domain, e.g. app.example.com",
+    "ami_id":                  "ami-xxxxxxxx",
+    "key_name":                "EC2 key pair name",
+}
+
+
+def hint_for(name: str) -> str | None:
+    """Return a short, human-readable hint for the named input, or None."""
+    if not name:
+        return None
+    return INPUT_HINTS.get(name) or INPUT_HINTS.get(name.lower())
+
+
+def build_prompt_label(name: str, classification: str | None,
+                       default) -> str:
+    """Return the indented prompt label, with classification, default, and hint."""
+    bits = []
+    if classification:
+        bits.append(classification)
+    if default is not None and default != "":
+        bits.append(f"default: {default}")
+    hint = hint_for(name)
+    if hint:
+        bits.append(hint)
+    label = f"    {name}"
+    if bits:
+        label += "  (" + "; ".join(bits) + ")"
+    return label
+
+
 def _term_width(default: int = 80) -> int:
     try:
         return min(shutil.get_terminal_size((default, 20)).columns, 100)
