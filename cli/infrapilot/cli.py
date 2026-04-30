@@ -61,10 +61,11 @@ def chat() -> None:
             display.failure(f"Request failed: {e}")
             continue
 
-        _drive_task(client, payload)
+        _drive_task(client, payload, original_prompt=text)
 
 
-def _drive_task(client, payload: dict, max_turns: int = 8) -> None:
+def _drive_task(client, payload: dict, original_prompt: str = "",
+                max_turns: int = 8) -> None:
     """Run the multi-turn lifecycle for one user prompt."""
     user_approved = False
     for _ in range(max_turns):
@@ -106,13 +107,24 @@ def _drive_task(client, payload: dict, max_turns: int = 8) -> None:
                 free = click.prompt("  More detail", default="", show_default=False)
                 if not free.strip():
                     return
+
+            # Backend can't dispatch /continue without selected_tool, so when the
+            # agent didn't pick one we re-submit a new task with the prompt
+            # enriched by the user's answers instead.
+            selected_tool = payload.get("selected_tool")
             try:
-                payload = client.continue_task(
-                    task_id,
-                    user_input=None if missing else free,
-                    provided_inputs=provided,
-                    execute=False,
-                )
+                if not selected_tool and original_prompt:
+                    enriched = _enriched_prompt(original_prompt, provided, free)
+                    display.info(f"  Re-submitting with provided values...")
+                    payload = client.submit(enriched)
+                    original_prompt = enriched
+                else:
+                    payload = client.continue_task(
+                        task_id,
+                        user_input=None if missing else free,
+                        provided_inputs=provided,
+                        execute=False,
+                    )
             except Exception as e:
                 display.failure(f"Continue failed: {e}")
                 return
@@ -150,6 +162,18 @@ def _drive_task(client, payload: dict, max_turns: int = 8) -> None:
         return
 
     display.failure("  Too many turns; aborting this task.")
+
+
+def _enriched_prompt(original: str, provided: dict, free_text: str = "") -> str:
+    """Compose a follow-up prompt that bakes the user's answers into the text."""
+    parts = [original.strip()]
+    if free_text and free_text.strip():
+        parts.append(free_text.strip())
+    if provided:
+        kv = "; ".join(f"{k}={v}" for k, v in provided.items() if v != "")
+        if kv:
+            parts.append(f"Use these values: {kv}.")
+    return " ".join(parts)
 
 
 if __name__ == "__main__":

@@ -215,8 +215,14 @@ def show_payload(payload: dict) -> None:
                      or c.get("step_name")
                      or c.get("label")
                      or "")
-            cmd = c.get("command")
-            if not cmd:
+            cmd_val = c.get("command")
+            if isinstance(cmd_val, dict):
+                binary = cmd_val.get("binary", "")
+                args = " ".join(cmd_val.get("args") or [])
+                cmd = f"{binary} {args}".strip()
+            elif isinstance(cmd_val, str) and cmd_val:
+                cmd = cmd_val
+            else:
                 binary = c.get("binary", "")
                 args = " ".join(c.get("args") or [])
                 cmd = f"{binary} {args}".strip()
