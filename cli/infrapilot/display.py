@@ -262,6 +262,62 @@ def confirm(message: str = "Proceed?") -> bool:
     return answer in {"y", "yes"}
 
 
+def show_caller_identity(identity: dict) -> None:
+    """Print AWS identity (account / arn / user_id) in a small panel."""
+    width = _term_width()
+    print()
+    print("-" * width)
+    print("  AWS IDENTITY")
+    print("-" * width)
+    print(f"  account: {identity.get('account', '?')}")
+    print(f"  arn:     {identity.get('arn', '?')}")
+    print(f"  user_id: {identity.get('user_id', '?')}")
+    print()
+
+
+def show_terraform_summary(summary: str) -> None:
+    """Highlight the parsed `terraform plan` summary line."""
+    width = _term_width()
+    print()
+    print("-" * width)
+    print(f"  TERRAFORM PLAN")
+    print("-" * width)
+    print(f"  {summary or '(no summary parsed)'}")
+    print()
+
+
+def show_apply_outputs(outputs: dict) -> None:
+    """Print `terraform output -json` keys/values in two columns."""
+    if not outputs:
+        return
+    print()
+    print("  outputs:")
+    width = _term_width()
+    keypad = max(len(k) for k in outputs.keys())
+    for k, v in outputs.items():
+        rendered = _format_output_value(v)
+        line = f"    {k:<{keypad}}  =  {rendered}"
+        if len(line) > width:
+            print(f"    {k}")
+            for sub in rendered.splitlines():
+                print(f"      {sub}")
+        else:
+            print(line)
+    print()
+
+
+def _format_output_value(v) -> str:
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (int, float, bool)) or v is None:
+        return str(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(_format_output_value(x) for x in v) + "]"
+    if isinstance(v, dict):
+        return "{" + ", ".join(f"{k}={_format_output_value(val)}" for k, val in v.items()) + "}"
+    return repr(v)
+
+
 def success(msg: str) -> None:
     print(f"  [ok]    {msg}")
 

@@ -1,4 +1,11 @@
-"""User config persistence: ~/.infrapilot/config.yaml (api_url, api_key)."""
+"""User config persistence: ~/.infrapilot/config.yaml.
+
+Recognized keys (all optional):
+  api_url          : backend base URL (e.g. https://...amazonaws.com)
+  api_key          : header sent as X-API-Key
+  aws_region       : pinned to AWS_REGION/AWS_DEFAULT_REGION when running terraform
+  expected_account : 12-digit AWS account id; deployment aborts if STS reports a different one
+"""
 
 from pathlib import Path
 

@@ -44,3 +44,36 @@ def recent(limit: int = 20) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return entries[-limit:]
+
+
+def update(task_id: str, **fields) -> bool:
+    """Merge ``fields`` into the most recent entry matching ``task_id``.
+
+    Used by the deployment phases to record apply_status, run_dir, outputs, etc.
+    Returns True if an entry was updated. The whole file is rewritten because
+    JSONL doesn't support in-place edits cheaply; history is small.
+    """
+    if not task_id or not HISTORY_FILE.exists():
+        return False
+    lines = HISTORY_FILE.read_text(encoding="utf-8").splitlines()
+    parsed: list[dict] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    updated = False
+    for entry in reversed(parsed):
+        if entry.get("task_id") == task_id:
+            entry.update(fields)
+            updated = True
+            break
+    if not updated:
+        return False
+    with HISTORY_FILE.open("w", encoding="utf-8") as fh:
+        for entry in parsed:
+            fh.write(json.dumps(entry) + "\n")
+    return True
