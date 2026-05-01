@@ -28,22 +28,22 @@ def check_s3_name_availability(bucket_name: str) -> dict:
     try:
         s3.head_bucket(Bucket=bucket_name)
         return {
-            "status": "needs_input",
+            "status": "error",
             "intent": "check_s3_name_availability",
             "files": [],
             "commands": [],
             "notes": [
-                f"S3 bucket name {bucket_name} is already in use by the current account."
+                f"S3 bucket name '{bucket_name}' is already in use by the current account."
             ],
             "requires_confirmation": False,
             "steps": [],
-            "error": "Bucket name is unavailable.",
-            "missing_parameters": [],
+            "error": f"Bucket name '{bucket_name}' is unavailable. Choose a different name.",
+            "missing_parameters": ["bucket_name"],
             "bucket_name": bucket_name,
             "available": False,
             "explanation": (
-                "The requested S3 bucket name is already owned or accessible by the "
-                "current AWS account. Choose a different bucket name."
+                f"The S3 bucket name '{bucket_name}' is already owned by the current "
+                "AWS account. Choose a different bucket name."
             ),
         }
     except ClientError as exc:
@@ -70,19 +70,20 @@ def check_s3_name_availability(bucket_name: str) -> dict:
 
         # 403 = exists in another account; anything else we treat as occupied/unknown.
         return {
-            "status": "needs_input",
+            "status": "error",
             "intent": "check_s3_name_availability",
             "files": [],
             "commands": [],
             "notes": [],
             "requires_confirmation": False,
             "steps": [],
-            "error": f"Name is unavailable (HTTP {status}, code={code}).",
-            "missing_parameters": [],
+            "error": f"Bucket name '{bucket_name}' is unavailable. Choose a different name.",
+            "missing_parameters": ["bucket_name"],
             "bucket_name": bucket_name,
             "available": False,
             "explanation": (
-                f"The requested S3 bucket name is unavailable (HTTP {status}, code={code})."
+                f"The S3 bucket name '{bucket_name}' is already taken (HTTP {status}). "
+                "Choose a different bucket name."
             ),
         }
     except Exception as exc:  # pragma: no cover - defensive
@@ -103,7 +104,7 @@ def check_s3_name_availability(bucket_name: str) -> dict:
 
 
 @tool
-def generate_s3_terraform(bucket_name: str, region: str = "us-east-1") -> dict:
+def generate_s3_terraform(bucket_name: str, region: str) -> dict:
     """Generate Terraform HCL and CLI commands for a minimal AWS S3 bucket.
 
     This is a pure string-template tool; it performs no network calls.

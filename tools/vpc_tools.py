@@ -9,9 +9,9 @@ from .core_payloads import render_terraform_template, terraform_payload
 
 @tool
 def generate_vpc_terraform(
-    region: str = "us-east-1",
+    region: str,
+    vpc_name: str,
     vpc_cidr: str = "10.0.0.0/16",
-    vpc_name: str = "infrapilot-vpc",
 ) -> dict[str, object]:
     """Generate Terraform HCL and CLI commands for a basic AWS VPC."""
     hcl = render_terraform_template(

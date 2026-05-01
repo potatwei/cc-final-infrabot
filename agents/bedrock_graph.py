@@ -14,6 +14,7 @@ The graph implements a classic ReAct loop:
 from __future__ import annotations
 
 import json
+import re
 from typing import Annotated, NotRequired, TypedDict
 
 from langchain_aws import ChatBedrockConverse
@@ -56,22 +57,32 @@ decide which one to call.
 General policy:
   1. Read the user's request and pick the single tool whose description best
      matches the requested AWS resource or action.
-  2. When a validation or pre-check tool is available (for
-     example, name availability, quota, permissions), prefer running it
-     BEFORE any tool that generates or mutates artifacts.
-  3. If a pre-check indicates the request cannot proceed, stop, do not
+  2. Before calling any tool, inspect the tool's required inputs. For each
+     required input that has no default value, verify the user has provided it.
+     If any such input is missing, stop immediately, do not call any tools,
+     and ask the user only for the missing ones. Never invent, guess, or
+     generate placeholder values for required inputs.
+  3. When a validation or pre-check tool is available (for example, name
+     availability, quota, permissions), prefer running it BEFORE any tool
+     that generates or mutates artifacts.
+  4. If a pre-check indicates the request cannot proceed, stop, do not
      call generation tools, and explain the blocker to the user.
-  4. If a pre-check succeeds, call the matching generation tool to produce
+  5. If a pre-check succeeds, call the matching generation tool to produce
      Terraform files and CLI commands.
-  5. Do not invent tools, arguments, or AWS resources that are not
+  6. Do not invent tools, arguments, or AWS resources that are not
      supported by the tools you have been given.
-  6. Keep responses aligned to simple resource planning. Do not assume
+  7. Keep responses aligned to simple resource planning. Do not assume
      hidden infrastructure state or create multi-stage workflows unless the
      available tools explicitly support them.
-  7. After all tool calls finish, respond with a short, natural-language
+  8. After all tool calls finish, respond with a short, natural-language
      summary of what was produced. Do not repeat the raw tool output.
-  8. If a tool returns status `needs_input`, do not treat it as an internal
+  9. If a tool returns status `needs_input`, do not treat it as an internal
      crash. Explain what is missing and what the user should provide next.
+ 10. If the user's request is completely unrelated to AWS infrastructure
+     (e.g. casual chat, insults, unrelated questions), respond only with:
+     "I am InfraPilot, an AWS infrastructure assistant. I can only help with
+     tasks supported by my tools, such as creating S3 buckets, EC2 instances,
+     and VPCs." Do not call any tools.
 """
 
 
@@ -101,7 +112,10 @@ Return exactly one JSON object with these keys:
 Rules:
   1. Pick only one tool from the catalog.
   2. Extract only values the user actually provided; do not invent values.
-  3. Keep defaultable fields out of missing_inputs when defaults are available.
+  3. Keep fields out of missing_inputs only when a non-empty default exists in
+     the catalog for that field. Fields with no default (e.g. region,
+     bucket_name, instance_name, vpc_name) must appear in missing_inputs if
+     the user did not provide them.
   4. Set ready_to_execute=true only when all required_inputs are present.
   5. If the request does not match any supported tool, set selected_tool=null,
      ready_to_execute=false, and explain the unsupported gap.
@@ -166,6 +180,7 @@ def _formatter_node(state: AgentState) -> dict:
     steps: list[dict] = []
     missing_parameters: list[str] = []
     intent: str | None = None
+    selected_tool: str | None = None
     requires_confirmation = False
     error: str | None = None
     final_status = "success"
@@ -203,6 +218,9 @@ def _formatter_node(state: AgentState) -> dict:
             )
         if "intent" in content and isinstance(content["intent"], str):
             intent = content["intent"]
+        tool_name = getattr(msg, "name", None)
+        if isinstance(tool_name, str) and tool_name in _GENERATION_TOOLS:
+            selected_tool = tool_name
         if "requires_confirmation" in content:
             requires_confirmation = (
                 requires_confirmation or bool(content["requires_confirmation"])
@@ -226,9 +244,22 @@ def _formatter_node(state: AgentState) -> dict:
                 part.get("text", "") if isinstance(part, dict) else str(part)
                 for part in last_ai.content
             ).strip()
+    explanation = _strip_thinking_tags(explanation)
 
-    if final_status == "success" and not (files or commands or steps or intent):
-        final_status = "error"
+    if final_status == "success" and not (files or commands or steps):
+        if _explanation_requests_input(explanation):
+            final_status = "needs_input"
+            inferred_tool = _extract_selected_tool_from_text(explanation)
+            if inferred_tool:
+                selected_tool = inferred_tool
+                spec = CORE_TOOL_INPUT_SPECS.get(inferred_tool)
+                if spec:
+                    if not intent:
+                        intent = spec.get("intent")
+                    if not missing_parameters:
+                        missing_parameters = _infer_missing_parameters_from_tool(inferred_tool)
+        elif not intent:
+            final_status = "error"
 
     if blocking_deploy_needs_infra:
         final_status = "needs_input"
@@ -268,6 +299,7 @@ def _formatter_node(state: AgentState) -> dict:
         "status": final_status,
         "task_id": state.get("task_id", ""),
         "intent": intent,
+        "selected_tool": selected_tool,
         "files": files,
         "commands": commands,
         "notes": notes,
@@ -433,6 +465,74 @@ def _build_discovery_explanation(
     if required_inputs:
         return f"Selected {selected_tool} and collected all required inputs for execution."
     return f"Selected {selected_tool}; execution can proceed with defaults."
+
+
+def _strip_thinking_tags(text: str) -> str:
+    """Remove <thinking>...</thinking> blocks from AI output before showing to users."""
+    stripped = re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL)
+    return stripped.strip()
+
+
+def _explanation_requests_input(explanation: str) -> bool:
+    """Return True when the AI explanation is asking the user for missing input.
+
+    Returns False for the fixed out-of-scope reply so that unrelated requests
+    are reported as errors rather than needs_input.
+    """
+    if not explanation:
+        return False
+    if "i am infrapilot" in explanation.lower():
+        return False
+    normalized = explanation.lower()
+    return explanation.rstrip().endswith("?") or any(
+        phrase in normalized
+        for phrase in (
+            "please provide",
+            "could you provide",
+            "can you provide",
+            "please specify",
+            "what name",
+        )
+    )
+
+
+_GENERATION_TOOLS = frozenset({
+    "generate_s3_terraform",
+    "generate_ec2_terraform",
+    "generate_vpc_terraform",
+})
+
+
+def _extract_selected_tool_from_text(text: str) -> str | None:
+    """Infer the intended generation tool from the AI's explanation text.
+
+    First tries exact tool-name matches, then falls back to semantic keywords
+    so that phrases like 'S3 bucket' or 'bucket name' still resolve correctly
+    even when the AI never writes the exact function name.
+    """
+    for tool_name in _GENERATION_TOOLS:
+        if tool_name in text:
+            return tool_name
+    lower = text.lower()
+    if any(kw in lower for kw in ("s3 bucket", "bucket name", "bucket_name")):
+        return "generate_s3_terraform"
+    if any(kw in lower for kw in ("ec2", "instance type", "instance_type", "instance name", "instance_name")):
+        return "generate_ec2_terraform"
+    if any(kw in lower for kw in ("vpc", "vpc name", "vpc_name")):
+        return "generate_vpc_terraform"
+    return None
+
+
+def _infer_missing_parameters_from_tool(tool_name: str) -> list[str]:
+    """Return required inputs that have no default value for the given tool."""
+    spec = CORE_TOOL_INPUT_SPECS.get(tool_name)
+    if not spec:
+        return []
+    defaults = spec.get("defaults", {})
+    return [
+        name for name in spec["required_inputs"]
+        if not defaults.get(name)
+    ]
 
 
 def _should_use_fallback_explanation(explanation: str, status: str) -> bool:
