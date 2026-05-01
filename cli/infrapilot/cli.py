@@ -331,7 +331,7 @@ def _handle_needs_input(client, payload: dict, original_prompt: str) -> dict | N
         required = set(payload.get("required_inputs") or [])
         recommended = set(payload.get("recommended_inputs") or [])
         optional = set(payload.get("optional_inputs") or [])
-        defaults = payload.get("defaults") or {}
+        defaults = lookups.defaults_for(payload)
         display.info(
             "  Please provide (Enter to accept default; "
             "see `infrapilot lookup --help` for valid values):"

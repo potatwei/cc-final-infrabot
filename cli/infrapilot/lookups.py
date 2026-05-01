@@ -4,6 +4,69 @@ Used by the `infrapilot lookup` commands so users can paste valid values
 into prompts without leaving the CLI.
 """
 
+
+# ---------------------------------------------------------------------------
+# Tool-level defaults
+#
+# Mirrors the backend agent's per-tool fallback values. The backend's
+# code_payload.defaults dict is currently always empty, so without these the
+# CLI's "Enter to accept default" prompt has nothing to offer. When the backend
+# starts populating its own defaults dict, payload defaults take precedence
+# over these.
+# ---------------------------------------------------------------------------
+
+TOOL_DEFAULTS: dict[str, dict[str, str]] = {
+    "generate_ec2_terraform": {
+        "region":             "us-east-1",
+        "instance_name":      "infrapilot-ec2",
+        "vpc_cidr":           "10.50.0.0/16",
+        "public_subnet_cidr": "10.50.1.0/24",
+    },
+    "generate_s3_terraform": {
+        "region": "us-east-1",
+    },
+    "generate_vpc_terraform": {
+        "region":   "us-east-1",
+        "vpc_cidr": "10.0.0.0/16",
+        "vpc_name": "infrapilot-vpc",
+    },
+    "check_s3_name_availability": {},
+}
+
+
+# When `selected_tool` is null (which is currently the common case — see the
+# backend selected_tool=None bug we work around with the resubmit fallback),
+# we infer it from `intent` instead.
+INTENT_TO_TOOL: dict[str, str] = {
+    "launch_ec2":                  "generate_ec2_terraform",
+    "deploy_ec2_instance":         "generate_ec2_terraform",
+    "deploy_s3_bucket":            "generate_s3_terraform",
+    "check_s3_name_availability":  "check_s3_name_availability",
+    "deploy_vpc_network":          "generate_vpc_terraform",
+    # workflow-core legacy intents
+    "setup_infra":                 "generate_vpc_terraform",
+}
+
+
+def defaults_for(payload: dict) -> dict[str, str]:
+    """Return the merged defaults for a payload.
+
+    Backend-provided ``payload["defaults"]`` always wins. Where it is empty
+    or missing, fall back to ``TOOL_DEFAULTS`` looked up via the payload's
+    ``selected_tool`` (or, failing that, ``intent``).
+    """
+    backend = dict(payload.get("defaults") or {})
+    tool = payload.get("selected_tool")
+    if not tool:
+        intent = payload.get("intent") or ""
+        tool = INTENT_TO_TOOL.get(intent)
+    fallback = TOOL_DEFAULTS.get(tool or "", {})
+    # backend values override fallbacks
+    merged = dict(fallback)
+    merged.update(backend)
+    return merged
+
+
 # (code, human-readable name)
 REGIONS = [
     ("us-east-1",      "US East (N. Virginia)"),
