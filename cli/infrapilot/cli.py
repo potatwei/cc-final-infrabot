@@ -7,7 +7,7 @@ executed locally — the backend owns all infrastructure work.
 
 import click
 
-from . import api, config, display, lookups
+from . import api, config, display, history, lookups
 
 
 @click.group()
@@ -65,6 +65,64 @@ def lookup_families() -> None:
         click.echo(f"  {fam:<5} {descr}")
 
 
+@main.command("tasks")
+@click.option("-n", "--limit", default=20, show_default=True,
+              help="Number of recent tasks to show.")
+@click.option("--refresh/--no-refresh", default=False,
+              help="Fetch live status from the backend for each task.")
+def tasks(limit: int, refresh: bool) -> None:
+    """List tasks submitted from this CLI (local history)."""
+    entries = history.recent(limit)
+    if not entries:
+        click.echo("  No tasks recorded yet. Submit one with `infrapilot chat`.")
+        return
+
+    if refresh:
+        cfg = config.load_user_config()
+        client = api.get_client(cfg)
+        if isinstance(client, api.FakeClient):
+            display.warn(
+                "  No api_url configured — showing recorded statuses without refresh."
+            )
+        else:
+            for e in entries:
+                try:
+                    payload = client.get_task(e["task_id"])
+                    e["status"] = payload.get("status") or e.get("status", "")
+                except Exception as ex:
+                    e["status"] = f"lookup-failed: {ex.__class__.__name__}"
+
+    click.echo("  timestamp                  task_id                                 status                  prompt")
+    click.echo("  " + "-" * 110)
+    for e in entries:
+        ts = e.get("timestamp", "?")
+        tid = e.get("task_id", "?")
+        st = e.get("status", "")
+        prompt = (e.get("prompt") or "").replace("\n", " ")
+        if len(prompt) > 50:
+            prompt = prompt[:47] + "..."
+        click.echo(f"  {ts:<26} {tid:<38} [{st:<20}]  {prompt}")
+
+
+@main.command("show")
+@click.argument("task_id")
+def show(task_id: str) -> None:
+    """Look up a task by id and render the current payload from the backend."""
+    cfg = config.load_user_config()
+    client = api.get_client(cfg)
+    if isinstance(client, api.FakeClient):
+        display.warn(
+            "No api_url configured. Run `infrapilot config --api-url ... --api-key ...` "
+            "to query the real backend."
+        )
+    try:
+        payload = client.get_task(task_id)
+    except Exception as e:
+        display.failure(f"Lookup failed: {e}")
+        return
+    display.show_payload(payload)
+
+
 @main.command()
 def chat() -> None:
     """Interactive REPL — type a request, review the plan, confirm."""
@@ -98,6 +156,7 @@ def chat() -> None:
             display.failure(f"Request failed: {e}")
             continue
 
+        history.record(payload.get("task_id", ""), text, payload.get("status", ""))
         _drive_task(client, payload, original_prompt=text)
 
 
@@ -157,6 +216,11 @@ def _drive_task(client, payload: dict, original_prompt: str = "",
                     enriched = _enriched_prompt(original_prompt, provided, free)
                     display.info(f"  Re-submitting with provided values...")
                     payload = client.submit(enriched)
+                    history.record(
+                        payload.get("task_id", ""),
+                        enriched,
+                        payload.get("status", ""),
+                    )
                     original_prompt = enriched
                 else:
                     payload = client.continue_task(

@@ -46,6 +46,16 @@ class HttpClient:
         r.raise_for_status()
         return self._wait_for_payload(r.json())
 
+    def get_task(self, task_id: str) -> dict:
+        """Fetch a task envelope by id and return its code_payload (with status)."""
+        r = self._client.get(f"/task/{task_id}")
+        r.raise_for_status()
+        task = r.json()
+        payload = dict(task.get("code_payload") or {})
+        payload["task_id"] = task_id
+        payload["status"] = task.get("status") or payload.get("status") or ""
+        return payload
+
     def confirm(self, task_id: str, approved: bool) -> dict:
         if not approved:
             return {"status": "cancelled", "task_id": task_id,

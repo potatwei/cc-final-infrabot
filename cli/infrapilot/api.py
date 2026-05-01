@@ -23,6 +23,7 @@ class Client(Protocol):
                       provided_inputs: dict | None = None,
                       execute: bool = False) -> dict: ...
     def confirm(self, task_id: str, approved: bool) -> dict: ...
+    def get_task(self, task_id: str) -> dict: ...
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +114,12 @@ class FakeClient:
         # Offline mode does not support multi-turn; return the existing payload.
         return self._tasks.get(task_id) or {
             "status": "error", "task_id": task_id, "message": "unknown task_id"
+        }
+
+    def get_task(self, task_id: str) -> dict:
+        return self._tasks.get(task_id) or {
+            "status": "error", "task_id": task_id,
+            "explanation": "Offline FakeClient does not persist tasks across runs.",
         }
 
     def confirm(self, task_id: str, approved: bool) -> dict:
