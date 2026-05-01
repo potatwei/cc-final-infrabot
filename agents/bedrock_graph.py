@@ -55,34 +55,28 @@ tool's name and description (provided to you alongside this prompt) to
 decide which one to call.
 
 General policy:
-  1. Read the user's request and pick the single tool whose description best
-     matches the requested AWS resource or action.
-  2. Before calling any tool, inspect the tool's required inputs. For each
-     required input that has no default value, verify the user has provided it.
-     If any such input is missing, stop immediately, do not call any tools,
-     and ask the user only for the missing ones. Never invent, guess, or
-     generate placeholder values for required inputs.
-  3. When a validation or pre-check tool is available (for example, name
-     availability, quota, permissions), prefer running it BEFORE any tool
-     that generates or mutates artifacts.
-  4. If a pre-check indicates the request cannot proceed, stop, do not
-     call generation tools, and explain the blocker to the user.
-  5. If a pre-check succeeds, call the matching generation tool to produce
-     Terraform files and CLI commands.
-  6. Do not invent tools, arguments, or AWS resources that are not
-     supported by the tools you have been given.
-  7. Keep responses aligned to simple resource planning. Do not assume
-     hidden infrastructure state or create multi-stage workflows unless the
-     available tools explicitly support them.
-  8. After all tool calls finish, respond with a short, natural-language
-     summary of what was produced. Do not repeat the raw tool output.
-  9. If a tool returns status `needs_input`, do not treat it as an internal
-     crash. Explain what is missing and what the user should provide next.
+  1. Read the user's request and identify which generation tool best matches
+     it (generate_s3_terraform, generate_ec2_terraform, generate_vpc_terraform).
+  2. Before calling any generation tool, identify all required inputs that
+     have no default value. Never invent or guess values.
+     - If ANY required input is missing: you MUST call `report_missing_inputs`
+       immediately. Pass the intended generation tool name, the list of
+       missing parameter names, and a short user-facing explanation.
+       Do NOT output plain text. Do NOT call any other tool first.
+     - Only if ALL required inputs are present: proceed to step 3.
+  3. When a validation or pre-check tool is available (e.g. name availability,
+     region validation), run it BEFORE the generation tool.
+  4. If a pre-check fails, stop and explain the blocker. Do not generate.
+  5. If a pre-check succeeds, call the generation tool.
+  6. Do not invent tools, arguments, or AWS resources not supported by your
+     available tools.
+  7. Keep responses aligned to simple resource planning.
+  8. After all tool calls finish, respond with a short natural-language summary.
+     Do not repeat raw tool output.
+  9. If a tool returns status `needs_input`, explain what is missing.
  10. If the user's request is completely unrelated to AWS infrastructure
-     (e.g. casual chat, insults, unrelated questions), respond only with:
-     "I am InfraPilot, an AWS infrastructure assistant. I can only help with
-     tasks supported by my tools, such as creating S3 buckets, EC2 instances,
-     and VPCs." Do not call any tools.
+     (e.g. casual chat), respond with a short plain-text message
+     saying you are an AWS infrastructure assistant. Do not call any tools.
 """
 
 
@@ -134,7 +128,8 @@ Tool catalog:
 def _build_llm(*, bind_tools: bool = True):
     """Instantiate the Bedrock Nova-Micro model with tools bound."""
     llm = ChatBedrockConverse(
-        model_id="amazon.nova-micro-v1:0",
+        # model_id="amazon.nova-micro-v1:0",
+        model_id ="amazon.nova-lite-v1:0",
         region_name="us-east-1",
         temperature=0,
         max_tokens=2000,
@@ -218,9 +213,10 @@ def _formatter_node(state: AgentState) -> dict:
             )
         if "intent" in content and isinstance(content["intent"], str):
             intent = content["intent"]
-        tool_name = getattr(msg, "name", None)
-        if isinstance(tool_name, str) and tool_name in _GENERATION_TOOLS:
-            selected_tool = tool_name
+        if "selected_tool" in content and isinstance(content["selected_tool"], str):
+            selected_tool = content["selected_tool"]
+        elif getattr(msg, "name", None) in _GENERATION_TOOLS:
+            selected_tool = msg.name
         if "requires_confirmation" in content:
             requires_confirmation = (
                 requires_confirmation or bool(content["requires_confirmation"])
@@ -246,20 +242,8 @@ def _formatter_node(state: AgentState) -> dict:
             ).strip()
     explanation = _strip_thinking_tags(explanation)
 
-    if final_status == "success" and not (files or commands or steps):
-        if _explanation_requests_input(explanation):
-            final_status = "needs_input"
-            inferred_tool = _extract_selected_tool_from_text(explanation)
-            if inferred_tool:
-                selected_tool = inferred_tool
-                spec = CORE_TOOL_INPUT_SPECS.get(inferred_tool)
-                if spec:
-                    if not intent:
-                        intent = spec.get("intent")
-                    if not missing_parameters:
-                        missing_parameters = _infer_missing_parameters_from_tool(inferred_tool)
-        elif not intent:
-            final_status = "error"
+    if final_status == "success" and not (files or commands or steps) and not intent:
+        final_status = "error"
 
     if blocking_deploy_needs_infra:
         final_status = "needs_input"
@@ -473,66 +457,11 @@ def _strip_thinking_tags(text: str) -> str:
     return stripped.strip()
 
 
-def _explanation_requests_input(explanation: str) -> bool:
-    """Return True when the AI explanation is asking the user for missing input.
-
-    Returns False for the fixed out-of-scope reply so that unrelated requests
-    are reported as errors rather than needs_input.
-    """
-    if not explanation:
-        return False
-    if "i am infrapilot" in explanation.lower():
-        return False
-    normalized = explanation.lower()
-    return explanation.rstrip().endswith("?") or any(
-        phrase in normalized
-        for phrase in (
-            "please provide",
-            "could you provide",
-            "can you provide",
-            "please specify",
-            "what name",
-        )
-    )
-
-
 _GENERATION_TOOLS = frozenset({
     "generate_s3_terraform",
     "generate_ec2_terraform",
     "generate_vpc_terraform",
 })
-
-
-def _extract_selected_tool_from_text(text: str) -> str | None:
-    """Infer the intended generation tool from the AI's explanation text.
-
-    First tries exact tool-name matches, then falls back to semantic keywords
-    so that phrases like 'S3 bucket' or 'bucket name' still resolve correctly
-    even when the AI never writes the exact function name.
-    """
-    for tool_name in _GENERATION_TOOLS:
-        if tool_name in text:
-            return tool_name
-    lower = text.lower()
-    if any(kw in lower for kw in ("s3 bucket", "bucket name", "bucket_name")):
-        return "generate_s3_terraform"
-    if any(kw in lower for kw in ("ec2", "instance type", "instance_type", "instance name", "instance_name")):
-        return "generate_ec2_terraform"
-    if any(kw in lower for kw in ("vpc", "vpc name", "vpc_name")):
-        return "generate_vpc_terraform"
-    return None
-
-
-def _infer_missing_parameters_from_tool(tool_name: str) -> list[str]:
-    """Return required inputs that have no default value for the given tool."""
-    spec = CORE_TOOL_INPUT_SPECS.get(tool_name)
-    if not spec:
-        return []
-    defaults = spec.get("defaults", {})
-    return [
-        name for name in spec["required_inputs"]
-        if not defaults.get(name)
-    ]
 
 
 def _should_use_fallback_explanation(explanation: str, status: str) -> bool:

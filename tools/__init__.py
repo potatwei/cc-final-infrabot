@@ -16,6 +16,7 @@ from .aws_lookup_tools import (
     validate_aws_region,
     validate_ec2_instance_type,
 )
+from .control_tools import report_missing_inputs
 from .ec2_tools import generate_ec2_terraform
 from .s3_tools import check_s3_name_availability, generate_s3_terraform
 from .vpc_tools import generate_vpc_terraform
@@ -144,11 +145,14 @@ CORE_TOOL_INPUT_SPECS: dict[str, ToolInputSpec] = {
     },
 }
 
-INFRAPILOT_TOOLS = [*CORE_TOOLS]
+CONTROL_TOOLS = [report_missing_inputs]
+
+INFRAPILOT_TOOLS = [*CORE_TOOLS, *CONTROL_TOOLS]
 
 __all__ = [
     "INFRAPILOT_TOOLS",
     "CORE_TOOLS",
+    "CONTROL_TOOLS",
     "CORE_TOOLS_BY_NAME",
     "CORE_TOOL_INPUT_SPECS",
     "ToolInputSpec",
@@ -164,4 +168,5 @@ __all__ = [
     "generate_s3_terraform",
     "generate_ec2_terraform",
     "generate_vpc_terraform",
+    "report_missing_inputs",
 ]
