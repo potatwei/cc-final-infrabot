@@ -20,6 +20,7 @@ from . import (
     display,
     history,
     lookups,
+    publish,
     runs,
     terraform_runner,
 )
@@ -430,13 +431,43 @@ def _deploy_locally(client, payload: dict, user_cfg: dict) -> None:
         history.update(task_id, apply_status="skipped")
         return
 
+    # If this is an S3 bucket task, optionally collect a GitHub repo URL up
+    # front. The clone + upload happens after `terraform apply` succeeds.
+    publish_opts = _collect_publish_opts(payload)
+
     run_dir = runs.prepare(task_id, files)
     history.update(task_id, run_dir=str(run_dir))
 
     if not _init_plan_and_confirm(run_dir, user_cfg, task_id):
         return
 
-    _run_apply(run_dir, user_cfg, task_id, client=client)
+    _run_apply(run_dir, user_cfg, task_id, client=client, publish_opts=publish_opts)
+
+
+def _collect_publish_opts(payload: dict) -> dict | None:
+    """Ask the user (only for S3 tasks) whether to enable static website
+    hosting. Returns ``{"repo": str, "branch": str | None}`` or None to skip.
+    """
+    intent = (payload.get("intent") or "").lower()
+    selected_tool = (payload.get("selected_tool") or "").lower()
+    if "s3" not in intent and "s3" not in selected_tool:
+        return None
+    if not display.confirm(
+        "Configure static website hosting and upload from a GitHub repo?"
+    ):
+        return None
+    repo = click.prompt(
+        "    github repo URL  (e.g. https://github.com/user/site or git@github.com:user/site.git)",
+        default="", show_default=False,
+    ).strip()
+    if not repo:
+        display.info("  No URL provided; skipping website setup.")
+        return None
+    branch = click.prompt(
+        "    branch  (Enter for default)",
+        default="", show_default=False,
+    ).strip() or None
+    return {"repo": repo, "branch": branch}
 
 
 def _aws_identity_gate(user_cfg: dict) -> bool:
@@ -489,7 +520,8 @@ def _init_plan_and_confirm(run_dir: Path, user_cfg: dict, task_id: str) -> bool:
     return True
 
 
-def _run_apply(run_dir: Path, user_cfg: dict, task_id: str, client) -> None:
+def _run_apply(run_dir: Path, user_cfg: dict, task_id: str, client,
+               publish_opts: dict | None = None) -> None:
     env = aws_auth.terraform_env(user_cfg.get("aws_region"))
     if terraform_runner.apply(run_dir, env) != 0:
         display.failure("  terraform apply failed; see output above.")
@@ -504,6 +536,43 @@ def _run_apply(run_dir: Path, user_cfg: dict, task_id: str, client) -> None:
         except Exception:
             display.warn("  Backend confirm failed; resources are still applied locally.")
     history.update(task_id, apply_status="deployed", outputs=outputs)
+
+    if publish_opts:
+        _publish_to_bucket(run_dir, user_cfg, task_id, publish_opts)
+
+
+def _publish_to_bucket(run_dir: Path, user_cfg: dict, task_id: str,
+                       opts: dict) -> None:
+    """Clone the user's GitHub repo and upload it to the just-applied bucket."""
+    bucket_name = publish.find_bucket_name_in_run_dir(run_dir)
+    if not bucket_name:
+        display.failure(
+            "  Could not determine the bucket name from the run dir; "
+            "website setup skipped."
+        )
+        return
+
+    region = user_cfg.get("aws_region") or "us-east-1"
+    repo = opts["repo"]
+    branch = opts.get("branch")
+
+    clone_dir: Path | None = None
+    try:
+        display.info(f"  Cloning {repo}{' @ ' + branch if branch else ''}...")
+        clone_dir = publish.clone_repo(repo, branch=branch)
+        display.info(f"  Configuring {bucket_name} for static website hosting...")
+        publish.enable_website(bucket_name, region=region)
+        display.info(f"  Uploading files to s3://{bucket_name}/ ...")
+        count = publish.sync_dir_to_bucket(clone_dir, bucket_name, region=region)
+        url = publish.website_endpoint(bucket_name, region=region)
+        display.show_website_published(url, count)
+        history.update(task_id, website_url=url, github_repo=repo, files_uploaded=count)
+    except publish.PublishError as e:
+        display.failure(f"  publish failed: {e}")
+        history.update(task_id, website_error=str(e))
+    finally:
+        if clone_dir is not None:
+            publish.cleanup(clone_dir)
 
 
 if __name__ == "__main__":

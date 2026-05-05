@@ -286,6 +286,18 @@ def show_terraform_summary(summary: str) -> None:
     print()
 
 
+def show_website_published(url: str, files: int) -> None:
+    """Final celebratory panel after a successful publish."""
+    width = _term_width()
+    print()
+    print("=" * width)
+    print("  WEBSITE PUBLISHED")
+    print("=" * width)
+    print(f"  files uploaded: {files}")
+    print(f"  url:            {url}")
+    print()
+
+
 def show_apply_outputs(outputs: dict) -> None:
     """Print `terraform output -json` keys/values in two columns."""
     if not outputs:
