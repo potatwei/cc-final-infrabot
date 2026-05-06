@@ -15,6 +15,7 @@ def report_missing_inputs(
     selected_tool: str,
     missing_parameters: list[str],
     explanation: str,
+    provided_inputs: dict | None = None,
 ) -> dict:
     """REQUIRED: Call this tool whenever required inputs are missing.
 
@@ -30,6 +31,9 @@ def report_missing_inputs(
         missing_parameters: Required parameter names the user has not yet
             provided (e.g. ["region", "instance_name"]).
         explanation: Short, user-facing message listing what is needed.
+        provided_inputs: Parameter names and values the user HAS already
+            provided (e.g. {"bucket_name": "my-bucket"}). Omit or pass
+            an empty dict if nothing was provided yet.
 
     Returns:
         A structured needs_input payload for the formatter.
@@ -38,6 +42,7 @@ def report_missing_inputs(
         "status": "needs_input",
         "intent": None,
         "selected_tool": selected_tool,
+        "provided_inputs": provided_inputs if isinstance(provided_inputs, dict) else {},
         "files": [],
         "commands": [],
         "notes": [],
