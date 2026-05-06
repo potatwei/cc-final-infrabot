@@ -57,15 +57,22 @@ decide which one to call.
 General policy:
   1. Read the user's request and identify which generation tool best matches
      it (generate_s3_terraform, generate_ec2_terraform, generate_vpc_terraform).
-  2. Before calling any generation tool, identify all required inputs that
+     2. Before calling any generation tool, identify all required inputs that
      have no default value. Never invent or guess values.
      - If ANY required input is missing: you MUST call `report_missing_inputs`
        immediately. Pass the intended generation tool name, the list of
-       missing parameter names, and a short user-facing explanation.
+       missing parameter names, a short user-facing explanation, AND a
+       `provided_inputs` dict containing every parameter the user DID supply
+       (e.g. {"bucket_name": "my-bucket"}).
        Do NOT output plain text. Do NOT call any other tool first.
      - Only if ALL required inputs are present: proceed to step 3.
   3. When a validation or pre-check tool is available (e.g. name availability,
      region validation), run it BEFORE the generation tool.
+     - For S3 bucket creation specifically: you MUST always call
+       `check_s3_name_availability` with the bucket_name BEFORE calling
+       `generate_s3_terraform`. Only proceed to generation if the tool
+       confirms the name is available. If the name is taken, stop and
+       inform the user to choose a different bucket name.
   4. If a pre-check fails, stop and explain the blocker. Do not generate.
   5. If a pre-check succeeds, call the generation tool.
   6. Do not invent tools, arguments, or AWS resources not supported by your
@@ -132,7 +139,7 @@ def _build_llm(*, bind_tools: bool = True):
         model_id ="amazon.nova-lite-v1:0",
         region_name="us-east-1",
         temperature=0,
-        max_tokens=2000,
+        max_tokens=5000,
     )
     if bind_tools:
         return llm.bind_tools(INFRAPILOT_TOOLS)
@@ -174,6 +181,7 @@ def _formatter_node(state: AgentState) -> dict:
     notes: list[str] = []
     steps: list[dict] = []
     missing_parameters: list[str] = []
+    provided_inputs: dict = {}
     intent: str | None = None
     selected_tool: str | None = None
     requires_confirmation = False
@@ -211,6 +219,8 @@ def _formatter_node(state: AgentState) -> dict:
             missing_parameters.extend(
                 str(item) for item in content["missing_parameters"] if isinstance(item, str)
             )
+        if "provided_inputs" in content and isinstance(content["provided_inputs"], dict):
+            provided_inputs.update(content["provided_inputs"])
         if "intent" in content and isinstance(content["intent"], str):
             intent = content["intent"]
         if "selected_tool" in content and isinstance(content["selected_tool"], str):
@@ -284,6 +294,7 @@ def _formatter_node(state: AgentState) -> dict:
         "task_id": state.get("task_id", ""),
         "intent": intent,
         "selected_tool": selected_tool,
+        "provided_inputs": provided_inputs,
         "files": files,
         "commands": commands,
         "notes": notes,
