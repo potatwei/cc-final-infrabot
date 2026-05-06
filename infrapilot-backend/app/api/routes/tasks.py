@@ -340,6 +340,7 @@ def _infer_selected_tool_from_prompt(prompt: str) -> str | None:
     has_region = bool(_extract_region(prompt))
     has_instance_type = bool(_extract_instance_type(prompt))
     has_bucket_name = bool(_extract_bucket_name(prompt))
+    website_keywords = ("website", "static site", "static website", "webpage", "frontend")
 
     if "region" in normalized and any(word in normalized for word in ("list", "available", "which", "what")):
         if has_region and ("valid" in normalized or "is " in normalized):
@@ -352,6 +353,10 @@ def _infer_selected_tool_from_prompt(prompt: str) -> str | None:
             return "list_ec2_instance_type_offerings"
     if has_bucket_name and any(word in normalized for word in ("available", "availability", "valid")):
         return "check_s3_name_availability"
+    if "s3" in normalized and any(keyword in normalized for keyword in website_keywords):
+        return "generate_s3_static_website_terraform"
+    if any(phrase in normalized for phrase in ("host website", "deploy website", "website to s3")):
+        return "generate_s3_static_website_terraform"
     if "s3" in normalized or "bucket" in normalized:
         return "generate_s3_terraform"
     if "ec2" in normalized or "instance" in normalized:
@@ -371,11 +376,13 @@ def _extract_inputs_from_prompt(prompt: str, selected_tool: str) -> dict[str, st
 
     if selected_tool in {
         "generate_s3_terraform",
+        "generate_s3_static_website_terraform",
         "check_s3_name_availability",
     } and bucket_name:
         extracted["bucket_name"] = bucket_name
     if selected_tool in {
         "generate_s3_terraform",
+        "generate_s3_static_website_terraform",
         "generate_ec2_terraform",
         "generate_vpc_terraform",
         "validate_aws_region",
@@ -579,6 +586,8 @@ def _build_ready_to_execute_explanation(
         return "All required values for EC2 generation are available."
     if selected_tool == "generate_s3_terraform":
         return "All required values for S3 bucket generation are available."
+    if selected_tool == "generate_s3_static_website_terraform":
+        return "All required values for S3 static website generation are available."
     if isinstance(base_explanation, str) and base_explanation.strip():
         return base_explanation.strip()
     if defaults and not provided_inputs:

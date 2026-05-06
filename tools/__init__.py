@@ -18,7 +18,11 @@ from .aws_lookup_tools import (
 )
 from .control_tools import report_missing_inputs
 from .ec2_tools import generate_ec2_terraform
-from .s3_tools import check_s3_name_availability, generate_s3_terraform
+from .s3_tools import (
+    check_s3_name_availability,
+    generate_s3_static_website_terraform,
+    generate_s3_terraform,
+)
 from .vpc_tools import generate_vpc_terraform
 
 
@@ -43,6 +47,7 @@ AWS_LOOKUP_TOOLS = [
 S3_TOOLS = [
     check_s3_name_availability,
     generate_s3_terraform,
+    generate_s3_static_website_terraform,
 ]
 
 EC2_TOOLS = [
@@ -117,6 +122,18 @@ CORE_TOOL_INPUT_SPECS: dict[str, ToolInputSpec] = {
         "precheck_tool": "check_s3_name_availability",
         "validators": {"region": "validate_aws_region"},
     },
+    "generate_s3_static_website_terraform": {
+        "intent": "deploy_s3_static_website",
+        "required_inputs": ["bucket_name", "region"],
+        "recommended_inputs": [],
+        "optional_inputs": ["index_document", "error_document"],
+        "defaults": {
+            "index_document": "index.html",
+            "error_document": "error.html",
+        },
+        "precheck_tool": "check_s3_name_availability",
+        "validators": {"region": "validate_aws_region"},
+    },
     "generate_ec2_terraform": {
         "intent": "deploy_ec2_instance",
         "required_inputs": ["instance_type", "region", "instance_name"],
@@ -166,6 +183,7 @@ __all__ = [
     "validate_ec2_instance_type",
     "check_s3_name_availability",
     "generate_s3_terraform",
+    "generate_s3_static_website_terraform",
     "generate_ec2_terraform",
     "generate_vpc_terraform",
     "report_missing_inputs",

@@ -153,3 +153,135 @@ def generate_s3_terraform(bucket_name: str, region: str) -> dict:
             "The bucket will be private by default."
         ),
     )
+
+
+@tool
+def generate_s3_static_website_terraform(
+    bucket_name: str,
+    region: str,
+    index_document: str = "index.html",
+    error_document: str = "error.html",
+) -> dict:
+    """Generate Terraform for a public S3 static website bucket.
+
+    This tool provisions the bucket, enables S3 website hosting, configures a
+    public-read bucket policy, and exposes outputs for the bucket name and
+    website endpoint. Uploading site content remains the responsibility of the
+    execution layer after `terraform apply`.
+    """
+    hcl = render_terraform_template(
+        f"""
+        terraform {{
+          required_providers {{
+            aws = {{
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }}
+          }}
+        }}
+
+        provider "aws" {{
+          region = "{region}"
+        }}
+
+        resource "aws_s3_bucket" "site" {{
+          bucket = "{bucket_name}"
+
+          tags = {{
+            Name      = "InfraPilot-Static-Website"
+            ManagedBy = "InfraPilot"
+          }}
+        }}
+
+        resource "aws_s3_bucket_public_access_block" "site" {{
+          bucket = aws_s3_bucket.site.id
+
+          block_public_acls       = false
+          block_public_policy     = false
+          ignore_public_acls      = false
+          restrict_public_buckets = false
+        }}
+
+        resource "aws_s3_bucket_ownership_controls" "site" {{
+          bucket = aws_s3_bucket.site.id
+
+          rule {{
+            object_ownership = "BucketOwnerPreferred"
+          }}
+        }}
+
+        resource "aws_s3_bucket_acl" "site" {{
+          depends_on = [
+            aws_s3_bucket_public_access_block.site,
+            aws_s3_bucket_ownership_controls.site,
+          ]
+
+          bucket = aws_s3_bucket.site.id
+          acl    = "public-read"
+        }}
+
+        resource "aws_s3_bucket_website_configuration" "site" {{
+          bucket = aws_s3_bucket.site.id
+
+          index_document {{
+            suffix = "{index_document}"
+          }}
+
+          error_document {{
+            key = "{error_document}"
+          }}
+        }}
+
+        data "aws_iam_policy_document" "public_read" {{
+          statement {{
+            sid    = "PublicReadGetObject"
+            effect = "Allow"
+
+            principals {{
+              type        = "*"
+              identifiers = ["*"]
+            }}
+
+            actions = ["s3:GetObject"]
+            resources = [
+              "${{aws_s3_bucket.site.arn}}/*"
+            ]
+          }}
+        }}
+
+        resource "aws_s3_bucket_policy" "site" {{
+          depends_on = [aws_s3_bucket_public_access_block.site]
+
+          bucket = aws_s3_bucket.site.id
+          policy = data.aws_iam_policy_document.public_read.json
+        }}
+
+        output "bucket_name" {{
+          value = aws_s3_bucket.site.bucket
+        }}
+
+        output "website_url" {{
+          value = format(
+            "%s.s3-website-%s.amazonaws.com",
+            aws_s3_bucket.site.bucket,
+            "{region}"
+          )
+        }}
+        """
+    )
+
+    return terraform_payload(
+        intent="deploy_s3_static_website",
+        content=hcl,
+        notes=[
+            (
+                "Configures S3 static website hosting with public read access. "
+                "Upload your built site content after apply, for example with "
+                f"`aws s3 sync ./site s3://{bucket_name}`."
+            )
+        ],
+        explanation=(
+            f"Prepared Terraform to host a static website in the S3 bucket {bucket_name} "
+            f"in {region} with index document {index_document}."
+        ),
+    )

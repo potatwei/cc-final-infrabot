@@ -188,7 +188,10 @@ class BackendTaskRouteTests(unittest.TestCase):
         body = response.json()
         self.assertEqual("collecting_input", body["status"])
         self.assertEqual("discovery", body["code_payload"]["mode"])
-        self.assertEqual(["instance_type"], body["code_payload"]["missing_inputs"])
+        self.assertEqual(
+            ["instance_type", "instance_name"],
+            body["code_payload"]["missing_inputs"],
+        )
         self.assertFalse(body["code_payload"]["ready_to_execute"])
         self.assertEqual("discovery", graph_calls[0]["mode"])
         self.assertEqual(body["task_id"], graph_calls[0]["task_id"])
@@ -259,7 +262,7 @@ class BackendTaskRouteTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         body = response.json()
-        self.assertEqual("ready_to_execute", body["status"])
+        self.assertEqual("collecting_input", body["status"])
         self.assertTrue(body["code_payload"]["ready_to_execute"])
         self.assertEqual(
             {"instance_type": "t3.micro", "region": "us-east-1"},
@@ -392,7 +395,7 @@ class BackendTaskRouteTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         body = response.json()
-        self.assertEqual("collecting_input", body["status"])
+        self.assertEqual("ready_to_execute", body["status"])
         self.assertCountEqual(
             ["instance_type", "region"],
             body["code_payload"]["missing_inputs"],
@@ -647,6 +650,62 @@ class BackendTaskRouteTests(unittest.TestCase):
         self.assertEqual("planned", body["status"])
         self.assertEqual("check_s3_name_availability", body["code_payload"]["intent"])
         self.assertTrue(body["code_payload"]["available"])
+
+    @patch.object(tasks_route, "Task", FakeTask)
+    @patch.object(tasks_route, "build_graph")
+    def test_discovery_routes_static_website_prompt_to_s3_website_tool(
+        self,
+        mock_build_graph,
+    ) -> None:
+        class FakeGraph:
+            def invoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "final_payload": {
+                        "status": "needs_input",
+                        "task_id": payload["task_id"],
+                        "mode": "discovery",
+                        "intent": "deploy_s3_bucket",
+                        "selected_tool": None,
+                        "provided_inputs": {},
+                        "missing_inputs": [],
+                        "ready_to_execute": False,
+                        "precheck_tool": None,
+                        "files": [],
+                        "commands": [],
+                        "notes": [],
+                        "requires_confirmation": False,
+                        "steps": [],
+                        "error": None,
+                        "explanation": "Need more detail.",
+                    }
+                }
+
+        mock_build_graph.return_value = FakeGraph()
+
+        response = self.client.post(
+            "/api/task",
+            json={
+                "user_prompt": (
+                    "host a static website on s3 using bucket named demo-static-site "
+                    "in us-east-1"
+                ),
+                "mode": "discovery",
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("ready_to_execute", body["status"])
+        self.assertEqual(
+            "generate_s3_static_website_terraform",
+            body["code_payload"]["selected_tool"],
+        )
+        self.assertEqual("deploy_s3_static_website", body["code_payload"]["intent"])
+        self.assertEqual(
+            {"bucket_name": "demo-static-site", "region": "us-east-1"},
+            body["code_payload"]["provided_inputs"],
+        )
+        self.assertTrue(body["code_payload"]["ready_to_execute"])
 
     @patch.object(tasks_route, "Task", FakeTask)
     @patch.object(tasks_route, "build_graph")

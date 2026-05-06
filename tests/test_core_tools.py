@@ -21,7 +21,11 @@ from tools.aws_lookup_tools import (
     validate_ec2_instance_type,
 )
 from tools.ec2_tools import generate_ec2_terraform
-from tools.s3_tools import check_s3_name_availability, generate_s3_terraform
+from tools.s3_tools import (
+    check_s3_name_availability,
+    generate_s3_static_website_terraform,
+    generate_s3_terraform,
+)
 from tools.vpc_tools import generate_vpc_terraform
 
 
@@ -41,32 +45,41 @@ class CoreToolRegistryTests(unittest.TestCase):
                 "validate_ec2_instance_type",
                 "check_s3_name_availability",
                 "generate_s3_terraform",
+                "generate_s3_static_website_terraform",
                 "generate_ec2_terraform",
                 "generate_vpc_terraform",
+                "report_missing_inputs",
             },
             default_names,
         )
         self.assertTrue(advanced_names.isdisjoint(default_names))
 
     def test_core_tool_specs_cover_default_registry(self) -> None:
-        default_names = {tool.name for tool in INFRAPILOT_TOOLS}
-        self.assertEqual(default_names, set(CORE_TOOL_INPUT_SPECS))
+        core_spec_names = {
+            tool.name for tool in INFRAPILOT_TOOLS if tool.name != "report_missing_inputs"
+        }
+        self.assertEqual(core_spec_names, set(CORE_TOOL_INPUT_SPECS))
 
     def test_ec2_and_s3_specs_capture_discovery_requirements(self) -> None:
         ec2_spec = CORE_TOOL_INPUT_SPECS["generate_ec2_terraform"]
         s3_spec = CORE_TOOL_INPUT_SPECS["generate_s3_terraform"]
+        s3_site_spec = CORE_TOOL_INPUT_SPECS["generate_s3_static_website_terraform"]
         vpc_spec = CORE_TOOL_INPUT_SPECS["generate_vpc_terraform"]
 
-        self.assertEqual(["instance_type"], ec2_spec["required_inputs"])
-        self.assertEqual(["region"], ec2_spec["recommended_inputs"])
-        self.assertEqual("us-east-1", ec2_spec["defaults"]["region"])
+        self.assertEqual(["instance_type", "region", "instance_name"], ec2_spec["required_inputs"])
+        self.assertEqual([], ec2_spec["recommended_inputs"])
+        self.assertEqual("10.50.0.0/16", ec2_spec["defaults"]["vpc_cidr"])
 
-        self.assertEqual(["bucket_name"], s3_spec["required_inputs"])
+        self.assertEqual(["bucket_name", "region"], s3_spec["required_inputs"])
         self.assertEqual("check_s3_name_availability", s3_spec["precheck_tool"])
         self.assertEqual("validate_aws_region", s3_spec["validators"]["region"])
 
-        self.assertEqual([], vpc_spec["required_inputs"])
-        self.assertEqual(["region"], vpc_spec["recommended_inputs"])
+        self.assertEqual(["bucket_name", "region"], s3_site_spec["required_inputs"])
+        self.assertEqual("index.html", s3_site_spec["defaults"]["index_document"])
+        self.assertEqual("check_s3_name_availability", s3_site_spec["precheck_tool"])
+
+        self.assertEqual(["region", "vpc_name"], vpc_spec["required_inputs"])
+        self.assertEqual([], vpc_spec["recommended_inputs"])
         self.assertEqual("validate_aws_region", vpc_spec["validators"]["region"])
 
 
@@ -163,6 +176,22 @@ class S3ToolTests(unittest.TestCase):
         self.assertEqual("terraform", result["files"][0]["type"])
         self.assertIn('region = "us-west-2"', result["files"][0]["content"])
         self.assertEqual("terraform", result["commands"][0]["command"]["binary"])
+        self.assertTrue(result["requires_confirmation"])
+
+    def test_generate_s3_static_website_terraform_returns_agent_payload(self) -> None:
+        result = generate_s3_static_website_terraform.invoke(
+            {
+                "bucket_name": "demo-static-site",
+                "region": "us-east-1",
+            }
+        )
+
+        self.assertEqual("success", result["status"])
+        self.assertEqual("deploy_s3_static_website", result["intent"])
+        self.assertEqual("main.tf", result["files"][0]["path"])
+        self.assertIn('resource "aws_s3_bucket_website_configuration" "site"', result["files"][0]["content"])
+        self.assertIn('output "website_url"', result["files"][0]["content"])
+        self.assertIn("static website", result["explanation"].lower())
         self.assertTrue(result["requires_confirmation"])
 
     @patch("tools.s3_tools.boto3.client")
@@ -266,6 +295,12 @@ class TerraformValidationSmokeTests(unittest.TestCase):
     def test_generated_s3_plan_validates(self) -> None:
         payload = generate_s3_terraform.invoke(
             {"bucket_name": "infra-pilot-demo-bucket", "region": "us-east-1"}
+        )
+        self._assert_payload_validates(payload)
+
+    def test_generated_s3_static_website_plan_validates(self) -> None:
+        payload = generate_s3_static_website_terraform.invoke(
+            {"bucket_name": "infra-pilot-static-site-demo", "region": "us-east-1"}
         )
         self._assert_payload_validates(payload)
 
