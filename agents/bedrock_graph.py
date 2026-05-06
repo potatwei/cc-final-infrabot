@@ -56,7 +56,8 @@ decide which one to call.
 
 General policy:
   1. Read the user's request and identify which generation tool best matches
-     it (generate_s3_terraform, generate_ec2_terraform, generate_vpc_terraform).
+     it (generate_s3_terraform, generate_s3_static_website_terraform,
+     generate_ec2_terraform, generate_vpc_terraform).
      2. Before calling any generation tool, identify all required inputs that
      have no default value. Never invent or guess values.
      - If ANY required input is missing: you MUST call `report_missing_inputs`
@@ -68,10 +69,11 @@ General policy:
      - Only if ALL required inputs are present: proceed to step 3.
   3. When a validation or pre-check tool is available (e.g. name availability,
      region validation), run it BEFORE the generation tool.
-     - For S3 bucket creation specifically: you MUST always call
-       `check_s3_name_availability` with the bucket_name BEFORE calling
-       `generate_s3_terraform`. Only proceed to generation if the tool
-       confirms the name is available. If the name is taken, stop and
+     - For S3 bucket creation and S3 static website creation specifically:
+       you MUST always call `check_s3_name_availability` with the bucket_name
+       BEFORE calling `generate_s3_terraform` or
+       `generate_s3_static_website_terraform`. Only proceed to generation if
+       the tool confirms the name is available. If the name is taken, stop and
        inform the user to choose a different bucket name.
   4. If a pre-check fails, stop and explain the blocker. Do not generate.
   5. If a pre-check succeeds, call the generation tool.

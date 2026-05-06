@@ -21,9 +21,9 @@ def report_missing_inputs(
 
     You MUST call this tool — never output plain text alone — when the user's
     request maps to a generation tool (generate_s3_terraform,
-    generate_ec2_terraform, or generate_vpc_terraform) but one or more
-    required inputs have not been provided. Do NOT call this for completely
-    unrelated requests.
+    generate_s3_static_website_terraform, generate_ec2_terraform, or
+    generate_vpc_terraform) but one or more required inputs have not been
+    provided. Do NOT call this for completely unrelated requests.
 
     Args:
         selected_tool: Exact name of the generation tool that will run once
