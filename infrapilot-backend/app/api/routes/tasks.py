@@ -5,7 +5,7 @@ import re
 import sys
 import os
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../../'))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../../../"))
 
 from agents.bedrock_graph import build_graph
 from app.core.task_status import map_task_status
@@ -27,22 +27,20 @@ PLACEHOLDER_VALUES = {"null", "none", "n/a", "na", "unknown", "unset", "tbd"}
 
 @router.post("/task", response_model=TaskResponse)
 def create_task(task_data: TaskCreate, db: Session = Depends(get_db)):
-    new_task = Task(
-        user_prompt=task_data.user_prompt,
-        status="pending",
-        code_payload=None
-    )
+    new_task = Task(user_prompt=task_data.user_prompt, status="pending", code_payload=None)
     db.add(new_task)
     db.commit()
 
     try:
         graph = build_graph()
-        result = graph.invoke({
-            "messages": [HumanMessage(content=task_data.user_prompt)],
-            "final_payload": {},
-            "task_id": new_task.task_id,
-            "mode": task_data.mode,
-        })
+        result = graph.invoke(
+            {
+                "messages": [HumanMessage(content=task_data.user_prompt)],
+                "final_payload": {},
+                "task_id": new_task.task_id,
+                "mode": task_data.mode,
+            }
+        )
         payload = result["final_payload"]
         if task_data.mode == "discovery":
             payload = _normalize_discovery_payload(payload=payload, prompt=task_data.user_prompt)
@@ -64,7 +62,7 @@ def create_task(task_data: TaskCreate, db: Session = Depends(get_db)):
             "steps": [],
             "error": str(e),
             "missing_parameters": [],
-            "explanation": str(e)
+            "explanation": str(e),
         }
 
     db.commit()
@@ -223,7 +221,9 @@ def _parse_discovery_user_input(*, user_input: str, spec: dict, payload: dict) -
     if not allowed_fields:
         return {}
 
-    field_pattern = "|".join(sorted((re.escape(field) for field in allowed_fields), key=len, reverse=True))
+    field_pattern = "|".join(
+        sorted((re.escape(field) for field in allowed_fields), key=len, reverse=True)
+    )
     updates: dict[str, str] = {}
     segments = [segment.strip() for segment in re.split(r"[,\n;]+", user_input) if segment.strip()]
 
@@ -287,9 +287,7 @@ def _normalize_discovery_payload(*, payload: dict, prompt: str) -> dict:
             "requires_confirmation": False,
             "steps": [],
             "error": None,
-            "explanation": (
-                "InfraPilot could not match this request to a supported tool yet."
-            ),
+            "explanation": "InfraPilot could not match this request to a supported tool yet.",
         }
 
     spec = CORE_TOOL_INPUT_SPECS[selected_tool]
@@ -474,9 +472,7 @@ def _run_discovery_validations(
             normalized_value = value.strip().lower()
             if not INSTANCE_TYPE_PATTERN.fullmatch(normalized_value):
                 invalid_fields.append(field_name)
-                invalid_messages.append(
-                    f"The instance type '{value}' does not look valid."
-                )
+                invalid_messages.append(f"The instance type '{value}' does not look valid.")
                 notes.append("instance_type: provide a value like t3.micro.")
                 continue
 
@@ -495,9 +491,7 @@ def _run_discovery_validations(
         notes.extend(str(note) for note in result.get("notes") or [])
         if validator_name == "validate_aws_region" and not result.get("valid", False):
             invalid_fields.append(field_name)
-            invalid_messages.append(
-                f"The region '{value}' does not look valid."
-            )
+            invalid_messages.append(f"The region '{value}' does not look valid.")
             notes.append("region: provide an AWS region like us-east-1.")
             suggestions = result.get("suggestions") or []
             if suggestions:
@@ -505,16 +499,12 @@ def _run_discovery_validations(
         if validator_name == "validate_ec2_instance_type":
             if not result.get("valid", False):
                 invalid_fields.append(field_name)
-                invalid_messages.append(
-                    f"The instance type '{value}' does not look valid."
-                )
+                invalid_messages.append(f"The instance type '{value}' does not look valid.")
                 notes.append("instance_type: provide a value like t3.micro.")
             elif not result.get("available_in_region", False):
                 invalid_fields.append(field_name)
                 region = validation_context.get("region", "that region")
-                invalid_messages.append(
-                    f"The instance type '{value}' is not available in {region}."
-                )
+                invalid_messages.append(f"The instance type '{value}' is not available in {region}.")
                 notes.append(
                     f"instance_type: choose another type or a different region than {region}."
                 )
@@ -672,9 +662,7 @@ def _build_precheck_inputs(provided_inputs: dict) -> dict:
 
 
 def _build_tool_inputs(*, spec: dict, provided_inputs: dict, defaults: dict) -> dict:
-    allowed_inputs = set(
-        spec["required_inputs"] + spec["recommended_inputs"] + spec["optional_inputs"]
-    )
+    allowed_inputs = set(spec["required_inputs"] + spec["recommended_inputs"] + spec["optional_inputs"])
     merged = {**defaults, **provided_inputs}
     return {key: value for key, value in merged.items() if key in allowed_inputs}
 

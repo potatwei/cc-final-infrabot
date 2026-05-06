@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "infrapilot"
+version = "0.1.0"
+description = "Natural-language DevOps assistant CLI for AWS ECS on Fargate"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.1",
+    "rich>=13.0",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    "boto3>=1.40",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+infrapilot = "infrapilot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["infrapilot*"]
