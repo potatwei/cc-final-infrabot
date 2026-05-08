@@ -446,16 +446,35 @@ def _deploy_locally(client, payload: dict, user_cfg: dict) -> None:
 
 def _collect_publish_opts(payload: dict) -> dict | None:
     """Ask the user (only for S3 tasks) whether to enable static website
-    hosting. Returns ``{"repo": str, "branch": str | None}`` or None to skip.
+    hosting. Returns ``{"repo", "branch", "skip_enable_website"}`` or None.
+
+    Two scenarios:
+      - ``deploy_s3_static_website`` (selected_tool=generate_s3_static_website_terraform):
+        backend's HCL already configures website hosting + public access. CLI
+        only needs the GitHub repo to clone + upload. enable_website() is
+        skipped to avoid Terraform drift.
+      - ``deploy_s3_bucket`` (plain private bucket): CLI asks whether to add
+        website hosting on top via boto3, then clones + uploads.
     """
     intent = (payload.get("intent") or "").lower()
     selected_tool = (payload.get("selected_tool") or "").lower()
     if "s3" not in intent and "s3" not in selected_tool:
         return None
-    if not display.confirm(
-        "Configure static website hosting and upload from a GitHub repo?"
-    ):
+
+    is_static_website = (
+        "static_website" in intent or "static_website" in selected_tool
+    )
+
+    if is_static_website:
+        display.info(
+            "  This task already generates a public, website-ready bucket."
+        )
+        prompt_msg = "Upload site files from a GitHub repo now?"
+    else:
+        prompt_msg = "Configure static website hosting and upload from a GitHub repo?"
+    if not display.confirm(prompt_msg):
         return None
+
     repo = click.prompt(
         "    github repo URL  (e.g. https://github.com/user/site or git@github.com:user/site.git)",
         default="", show_default=False,
@@ -467,7 +486,11 @@ def _collect_publish_opts(payload: dict) -> dict | None:
         "    branch  (Enter for default)",
         default="", show_default=False,
     ).strip() or None
-    return {"repo": repo, "branch": branch}
+    return {
+        "repo": repo,
+        "branch": branch,
+        "skip_enable_website": is_static_website,
+    }
 
 
 def _aws_identity_gate(user_cfg: dict) -> bool:
@@ -560,8 +583,14 @@ def _publish_to_bucket(run_dir: Path, user_cfg: dict, task_id: str,
     try:
         display.info(f"  Cloning {repo}{' @ ' + branch if branch else ''}...")
         clone_dir = publish.clone_repo(repo, branch=branch)
-        display.info(f"  Configuring {bucket_name} for static website hosting...")
-        publish.enable_website(bucket_name, region=region)
+        if not opts.get("skip_enable_website"):
+            display.info(f"  Configuring {bucket_name} for static website hosting...")
+            publish.enable_website(bucket_name, region=region)
+        else:
+            display.info(
+                f"  Skipping boto3 website setup; Terraform already configured "
+                f"{bucket_name}."
+            )
         display.info(f"  Uploading files to s3://{bucket_name}/ ...")
         count = publish.sync_dir_to_bucket(clone_dir, bucket_name, region=region)
         url = publish.website_endpoint(bucket_name, region=region)
