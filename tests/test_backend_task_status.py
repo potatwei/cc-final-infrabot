@@ -34,6 +34,16 @@ class BackendTaskStatusTests(unittest.TestCase):
 
         self.assertEqual("needs_input", map_task_status(payload))
 
+    def test_discovery_success_maps_to_ready_to_execute(self) -> None:
+        payload = {"mode": "discovery", "status": "success", "requires_confirmation": False}
+
+        self.assertEqual("ready_to_execute", map_task_status(payload))
+
+    def test_discovery_needs_input_maps_to_collecting_input(self) -> None:
+        payload = {"mode": "discovery", "status": "needs_input", "requires_confirmation": False}
+
+        self.assertEqual("collecting_input", map_task_status(payload))
+
     def test_error_maps_to_failed(self) -> None:
         payload = {"status": "error", "requires_confirmation": False}
 

@@ -28,22 +28,22 @@ def check_s3_name_availability(bucket_name: str) -> dict:
     try:
         s3.head_bucket(Bucket=bucket_name)
         return {
-            "status": "needs_input",
+            "status": "error",
             "intent": "check_s3_name_availability",
             "files": [],
             "commands": [],
             "notes": [
-                f"S3 bucket name {bucket_name} is already in use by the current account."
+                f"S3 bucket name '{bucket_name}' is already in use by the current account."
             ],
             "requires_confirmation": False,
             "steps": [],
-            "error": "Bucket name is unavailable.",
-            "missing_parameters": [],
+            "error": f"Bucket name '{bucket_name}' is unavailable. Choose a different name.",
+            "missing_parameters": ["bucket_name"],
             "bucket_name": bucket_name,
             "available": False,
             "explanation": (
-                "The requested S3 bucket name is already owned or accessible by the "
-                "current AWS account. Choose a different bucket name."
+                f"The S3 bucket name '{bucket_name}' is already owned by the current "
+                "AWS account. Choose a different bucket name."
             ),
         }
     except ClientError as exc:
@@ -70,19 +70,20 @@ def check_s3_name_availability(bucket_name: str) -> dict:
 
         # 403 = exists in another account; anything else we treat as occupied/unknown.
         return {
-            "status": "needs_input",
+            "status": "error",
             "intent": "check_s3_name_availability",
             "files": [],
             "commands": [],
             "notes": [],
             "requires_confirmation": False,
             "steps": [],
-            "error": f"Name is unavailable (HTTP {status}, code={code}).",
-            "missing_parameters": [],
+            "error": f"Bucket name '{bucket_name}' is unavailable. Choose a different name.",
+            "missing_parameters": ["bucket_name"],
             "bucket_name": bucket_name,
             "available": False,
             "explanation": (
-                f"The requested S3 bucket name is unavailable (HTTP {status}, code={code})."
+                f"The S3 bucket name '{bucket_name}' is already taken (HTTP {status}). "
+                "Choose a different bucket name."
             ),
         }
     except Exception as exc:  # pragma: no cover - defensive
@@ -103,7 +104,7 @@ def check_s3_name_availability(bucket_name: str) -> dict:
 
 
 @tool
-def generate_s3_terraform(bucket_name: str, region: str = "us-east-1") -> dict:
+def generate_s3_terraform(bucket_name: str, region: str) -> dict:
     """Generate Terraform HCL and CLI commands for a minimal AWS S3 bucket.
 
     This is a pure string-template tool; it performs no network calls.
@@ -150,5 +151,137 @@ def generate_s3_terraform(bucket_name: str, region: str = "us-east-1") -> dict:
         explanation=(
             f"Prepared Terraform to create the S3 bucket {bucket_name} in {region}. "
             "The bucket will be private by default."
+        ),
+    )
+
+
+@tool
+def generate_s3_static_website_terraform(
+    bucket_name: str,
+    region: str,
+    index_document: str = "index.html",
+    error_document: str = "error.html",
+) -> dict:
+    """Generate Terraform for a public S3 static website bucket.
+
+    This tool provisions the bucket, enables S3 website hosting, configures a
+    public-read bucket policy, and exposes outputs for the bucket name and
+    website endpoint. Uploading site content remains the responsibility of the
+    execution layer after `terraform apply`.
+    """
+    hcl = render_terraform_template(
+        f"""
+        terraform {{
+          required_providers {{
+            aws = {{
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }}
+          }}
+        }}
+
+        provider "aws" {{
+          region = "{region}"
+        }}
+
+        resource "aws_s3_bucket" "site" {{
+          bucket = "{bucket_name}"
+
+          tags = {{
+            Name      = "InfraPilot-Static-Website"
+            ManagedBy = "InfraPilot"
+          }}
+        }}
+
+        resource "aws_s3_bucket_public_access_block" "site" {{
+          bucket = aws_s3_bucket.site.id
+
+          block_public_acls       = false
+          block_public_policy     = false
+          ignore_public_acls      = false
+          restrict_public_buckets = false
+        }}
+
+        resource "aws_s3_bucket_ownership_controls" "site" {{
+          bucket = aws_s3_bucket.site.id
+
+          rule {{
+            object_ownership = "BucketOwnerPreferred"
+          }}
+        }}
+
+        resource "aws_s3_bucket_acl" "site" {{
+          depends_on = [
+            aws_s3_bucket_public_access_block.site,
+            aws_s3_bucket_ownership_controls.site,
+          ]
+
+          bucket = aws_s3_bucket.site.id
+          acl    = "public-read"
+        }}
+
+        resource "aws_s3_bucket_website_configuration" "site" {{
+          bucket = aws_s3_bucket.site.id
+
+          index_document {{
+            suffix = "{index_document}"
+          }}
+
+          error_document {{
+            key = "{error_document}"
+          }}
+        }}
+
+        data "aws_iam_policy_document" "public_read" {{
+          statement {{
+            sid    = "PublicReadGetObject"
+            effect = "Allow"
+
+            principals {{
+              type        = "*"
+              identifiers = ["*"]
+            }}
+
+            actions = ["s3:GetObject"]
+            resources = [
+              "${{aws_s3_bucket.site.arn}}/*"
+            ]
+          }}
+        }}
+
+        resource "aws_s3_bucket_policy" "site" {{
+          depends_on = [aws_s3_bucket_public_access_block.site]
+
+          bucket = aws_s3_bucket.site.id
+          policy = data.aws_iam_policy_document.public_read.json
+        }}
+
+        output "bucket_name" {{
+          value = aws_s3_bucket.site.bucket
+        }}
+
+        output "website_url" {{
+          value = format(
+            "%s.s3-website-%s.amazonaws.com",
+            aws_s3_bucket.site.bucket,
+            "{region}"
+          )
+        }}
+        """
+    )
+
+    return terraform_payload(
+        intent="deploy_s3_static_website",
+        content=hcl,
+        notes=[
+            (
+                "Configures S3 static website hosting with public read access. "
+                "Upload your built site content after apply, for example with "
+                f"`aws s3 sync ./site s3://{bucket_name}`."
+            )
+        ],
+        explanation=(
+            f"Prepared Terraform to host a static website in the S3 bucket {bucket_name} "
+            f"in {region} with index document {index_document}."
         ),
     )

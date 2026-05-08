@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import AIMessage, ToolMessage
 
-from agents.bedrock_graph import _formatter_node, _route_after_action
+from agents.bedrock_graph import _agent_node, _formatter_node, _route_after_action
 from run_agent import demo_workflow_payload
 from tools.ec2_tools import generate_ec2_terraform
 from tools.vpc_tools import generate_vpc_terraform
@@ -490,6 +490,105 @@ class FormatterNodeTests(unittest.TestCase):
         }
 
         self.assertEqual("formatter", _route_after_action(state))
+
+    def test_formatter_builds_discovery_payload_for_missing_ec2_inputs(self) -> None:
+        discovery_json = json.dumps(
+            {
+                "selected_tool": "generate_ec2_terraform",
+                "intent": "deploy_ec2_instance",
+                "required_inputs": ["instance_type"],
+                "recommended_inputs": ["region"],
+                "optional_inputs": ["instance_name", "vpc_cidr", "public_subnet_cidr"],
+                "defaults": {
+                    "region": "us-east-1",
+                    "instance_name": "infrapilot-ec2",
+                    "vpc_cidr": "10.50.0.0/16",
+                    "public_subnet_cidr": "10.50.1.0/24",
+                },
+                "provided_inputs": {"region": "us-east-1"},
+                "missing_inputs": ["instance_type"],
+                "ready_to_execute": False,
+                "precheck_tool": None,
+                "explanation": "Need the EC2 instance type before generation.",
+            }
+        )
+        state = {
+            "mode": "discovery",
+            "task_id": "task-discovery-1",
+            "messages": [AIMessage(content=discovery_json)],
+        }
+
+        formatted = _formatter_node(state)["final_payload"]
+
+        self.assertEqual("needs_input", formatted["status"])
+        self.assertEqual("discovery", formatted["mode"])
+        self.assertEqual("generate_ec2_terraform", formatted["selected_tool"])
+        self.assertEqual(["instance_type"], formatted["missing_inputs"])
+        self.assertEqual(["instance_type"], formatted["missing_parameters"])
+        self.assertFalse(formatted["ready_to_execute"])
+        self.assertEqual({"region": "us-east-1"}, formatted["provided_inputs"])
+
+    def test_formatter_builds_discovery_payload_when_execution_is_ready(self) -> None:
+        discovery_json = json.dumps(
+            {
+                "selected_tool": "generate_vpc_terraform",
+                "intent": "deploy_vpc_network",
+                "required_inputs": [],
+                "recommended_inputs": ["region"],
+                "optional_inputs": ["vpc_name", "vpc_cidr"],
+                "defaults": {
+                    "region": "us-east-1",
+                    "vpc_name": "infrapilot-vpc",
+                    "vpc_cidr": "10.0.0.0/16",
+                },
+                "provided_inputs": {
+                    "region": "us-east-1",
+                    "vpc_name": "demo-vpc",
+                    "vpc_cidr": "10.42.0.0/16",
+                },
+                "missing_inputs": [],
+                "ready_to_execute": True,
+                "precheck_tool": None,
+                "explanation": "Ready to generate Terraform for the VPC request.",
+            }
+        )
+        state = {
+            "mode": "discovery",
+            "task_id": "task-discovery-2",
+            "messages": [AIMessage(content=discovery_json)],
+        }
+
+        formatted = _formatter_node(state)["final_payload"]
+
+        self.assertEqual("success", formatted["status"])
+        self.assertTrue(formatted["ready_to_execute"])
+        self.assertEqual("generate_vpc_terraform", formatted["selected_tool"])
+        self.assertEqual([], formatted["missing_inputs"])
+        self.assertEqual("deploy_vpc_network", formatted["intent"])
+
+
+class AgentNodeModeTests(unittest.TestCase):
+    @patch("agents.bedrock_graph._build_llm")
+    def test_discovery_mode_uses_unbound_llm_and_discovery_prompt(
+        self,
+        mock_build_llm: MagicMock,
+    ) -> None:
+        llm = MagicMock()
+        llm.invoke.return_value = AIMessage(content='{"selected_tool": null}')
+        mock_build_llm.return_value = llm
+
+        _agent_node(
+            {
+                "mode": "discovery",
+                "messages": [AIMessage(content="ignored")],
+                "final_payload": {},
+                "task_id": "task-discovery-3",
+            }
+        )
+
+        mock_build_llm.assert_called_once_with(bind_tools=False)
+        messages = llm.invoke.call_args.args[0]
+        self.assertIn("InfraPilot in discovery mode", messages[0].content)
 
 
 class RunAgentDemoTests(unittest.TestCase):

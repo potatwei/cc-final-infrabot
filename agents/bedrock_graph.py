@@ -14,6 +14,7 @@ The graph implements a classic ReAct loop:
 from __future__ import annotations
 
 import json
+import re
 from typing import Annotated, NotRequired, TypedDict
 
 from langchain_aws import ChatBedrockConverse
@@ -22,7 +23,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
-from tools import INFRAPILOT_TOOLS
+from tools import CORE_TOOL_INPUT_SPECS, INFRAPILOT_TOOLS
 
 
 # --------------------------------------------------------------------------- #
@@ -38,6 +39,7 @@ class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     final_payload: dict
     task_id: NotRequired[str]
+    mode: NotRequired[str]
 
 
 # --------------------------------------------------------------------------- #
@@ -53,24 +55,76 @@ tool's name and description (provided to you alongside this prompt) to
 decide which one to call.
 
 General policy:
-  1. Read the user's request and pick the single tool whose description best
-     matches the requested AWS resource or action.
-  2. When a validation or pre-check tool is available (for
-     example, name availability, quota, permissions), prefer running it
-     BEFORE any tool that generates or mutates artifacts.
-  3. If a pre-check indicates the request cannot proceed, stop, do not
-     call generation tools, and explain the blocker to the user.
-  4. If a pre-check succeeds, call the matching generation tool to produce
-     Terraform files and CLI commands.
-  5. Do not invent tools, arguments, or AWS resources that are not
-     supported by the tools you have been given.
-  6. Keep responses aligned to simple resource planning. Do not assume
-     hidden infrastructure state or create multi-stage workflows unless the
-     available tools explicitly support them.
-  7. After all tool calls finish, respond with a short, natural-language
-     summary of what was produced. Do not repeat the raw tool output.
-  8. If a tool returns status `needs_input`, do not treat it as an internal
-     crash. Explain what is missing and what the user should provide next.
+  1. Read the user's request and identify which generation tool best matches
+     it (generate_s3_terraform, generate_s3_static_website_terraform,
+     generate_ec2_terraform, generate_vpc_terraform).
+     2. Before calling any generation tool, identify all required inputs that
+     have no default value. Never invent or guess values.
+     - If ANY required input is missing: you MUST call `report_missing_inputs`
+       immediately. Pass the intended generation tool name, the list of
+       missing parameter names, a short user-facing explanation, AND a
+       `provided_inputs` dict containing every parameter the user DID supply
+       (e.g. {"bucket_name": "my-bucket"}).
+       Do NOT output plain text. Do NOT call any other tool first.
+     - Only if ALL required inputs are present: proceed to step 3.
+  3. When a validation or pre-check tool is available (e.g. name availability,
+     region validation), run it BEFORE the generation tool.
+     - For S3 bucket creation and S3 static website creation specifically:
+       you MUST always call `check_s3_name_availability` with the bucket_name
+       BEFORE calling `generate_s3_terraform` or
+       `generate_s3_static_website_terraform`. Only proceed to generation if
+       the tool confirms the name is available. If the name is taken, stop and
+       inform the user to choose a different bucket name.
+  4. If a pre-check fails, stop and explain the blocker. Do not generate.
+  5. If a pre-check succeeds, call the generation tool.
+  6. Do not invent tools, arguments, or AWS resources not supported by your
+     available tools.
+  7. Keep responses aligned to simple resource planning.
+  8. After all tool calls finish, respond with a short natural-language summary.
+     Do not repeat raw tool output.
+  9. If a tool returns status `needs_input`, explain what is missing.
+ 10. If the user's request is completely unrelated to AWS infrastructure
+     (e.g. casual chat), respond with a short plain-text message
+     saying you are an AWS infrastructure assistant. Do not call any tools.
+"""
+
+
+def _build_discovery_prompt() -> str:
+    """Build the discovery-mode prompt from the current core tool catalog."""
+    tool_catalog = json.dumps(CORE_TOOL_INPUT_SPECS, indent=2, sort_keys=True)
+    return f"""You are InfraPilot in discovery mode.
+
+Your job is to inspect the user's request and decide which single tool from the
+catalog best matches it. Do not call tools. Do not generate Terraform.
+
+Return exactly one JSON object with these keys:
+{{
+  "selected_tool": string or null,
+  "intent": string or null,
+  "required_inputs": string[],
+  "recommended_inputs": string[],
+  "optional_inputs": string[],
+  "defaults": object,
+  "provided_inputs": object,
+  "missing_inputs": string[],
+  "ready_to_execute": boolean,
+  "precheck_tool": string or null,
+  "explanation": string
+}}
+
+Rules:
+  1. Pick only one tool from the catalog.
+  2. Extract only values the user actually provided; do not invent values.
+  3. Keep fields out of missing_inputs only when a non-empty default exists in
+     the catalog for that field. Fields with no default (e.g. region,
+     bucket_name, instance_name, vpc_name) must appear in missing_inputs if
+     the user did not provide them.
+  4. Set ready_to_execute=true only when all required_inputs are present.
+  5. If the request does not match any supported tool, set selected_tool=null,
+     ready_to_execute=false, and explain the unsupported gap.
+
+Tool catalog:
+{tool_catalog}
 """
 
 # SYSTEM_PROMPT = """You are InfraPilot, an AWS infrastructure assistant.
@@ -80,15 +134,18 @@ General policy:
 # """
 
 
-def _build_llm():
+def _build_llm(*, bind_tools: bool = True):
     """Instantiate the Bedrock Nova-Micro model with tools bound."""
     llm = ChatBedrockConverse(
-        model_id="amazon.nova-micro-v1:0",
+        # model_id="amazon.nova-micro-v1:0",
+        model_id ="amazon.nova-lite-v1:0",
         region_name="us-east-1",
         temperature=0,
-        max_tokens=2000,
+        max_tokens=5000,
     )
-    return llm.bind_tools(INFRAPILOT_TOOLS)
+    if bind_tools:
+        return llm.bind_tools(INFRAPILOT_TOOLS)
+    return llm
 
 ## We use aws bedrock to interact with the model
 ## https://reference.langchain.com/python/langchain-aws/chat_models/bedrock_converse/ChatBedrockConverse
@@ -99,11 +156,16 @@ def _build_llm():
 # --------------------------------------------------------------------------- #
 def _agent_node(state: AgentState) -> dict:
     """Run the LLM over the current message history."""
-    llm = _build_llm()
+    mode = state.get("mode", "execution")
+    llm = _build_llm(bind_tools=mode != "discovery")
     messages = state["messages"]
 
+    prompt = _build_discovery_prompt() if mode == "discovery" else SYSTEM_PROMPT
+
     if not messages or not isinstance(messages[0], SystemMessage):
-        messages = [SystemMessage(content=SYSTEM_PROMPT), *messages]
+        messages = [SystemMessage(content=prompt), *messages]
+    else:
+        messages = [SystemMessage(content=prompt), *messages[1:]]
 
     response = llm.invoke(messages)
     return {"messages": [response]}
@@ -111,6 +173,9 @@ def _agent_node(state: AgentState) -> dict:
 
 def _formatter_node(state: AgentState) -> dict:
     """Collapse the conversation into the strict FinalResponse payload."""
+    if state.get("mode") == "discovery":
+        return {"final_payload": _build_discovery_payload(state)}
+
     blocking_deploy_needs_infra = False
     blocking_deploy_error: str | None = None
     files: list[dict] = []
@@ -118,7 +183,9 @@ def _formatter_node(state: AgentState) -> dict:
     notes: list[str] = []
     steps: list[dict] = []
     missing_parameters: list[str] = []
+    provided_inputs: dict = {}
     intent: str | None = None
+    selected_tool: str | None = None
     requires_confirmation = False
     error: str | None = None
     final_status = "success"
@@ -154,8 +221,14 @@ def _formatter_node(state: AgentState) -> dict:
             missing_parameters.extend(
                 str(item) for item in content["missing_parameters"] if isinstance(item, str)
             )
+        if "provided_inputs" in content and isinstance(content["provided_inputs"], dict):
+            provided_inputs.update(content["provided_inputs"])
         if "intent" in content and isinstance(content["intent"], str):
             intent = content["intent"]
+        if "selected_tool" in content and isinstance(content["selected_tool"], str):
+            selected_tool = content["selected_tool"]
+        elif getattr(msg, "name", None) in _GENERATION_TOOLS:
+            selected_tool = msg.name
         if "requires_confirmation" in content:
             requires_confirmation = (
                 requires_confirmation or bool(content["requires_confirmation"])
@@ -179,8 +252,9 @@ def _formatter_node(state: AgentState) -> dict:
                 part.get("text", "") if isinstance(part, dict) else str(part)
                 for part in last_ai.content
             ).strip()
+    explanation = _strip_thinking_tags(explanation)
 
-    if final_status == "success" and not (files or commands or steps or intent):
+    if final_status == "success" and not (files or commands or steps) and not intent:
         final_status = "error"
 
     if blocking_deploy_needs_infra:
@@ -221,6 +295,8 @@ def _formatter_node(state: AgentState) -> dict:
         "status": final_status,
         "task_id": state.get("task_id", ""),
         "intent": intent,
+        "selected_tool": selected_tool,
+        "provided_inputs": provided_inputs,
         "files": files,
         "commands": commands,
         "notes": notes,
@@ -231,6 +307,174 @@ def _formatter_node(state: AgentState) -> dict:
         "explanation": explanation or "InfraPilot finished processing your request.",
     }
     return {"final_payload": final_payload}
+
+
+def _build_discovery_payload(state: AgentState) -> dict:
+    """Shape the last discovery response into a structured pre-execution payload."""
+    raw_text = _message_text(state["messages"][-1]) if state["messages"] else ""
+    content = _parse_json_object(raw_text)
+
+    if not isinstance(content, dict):
+        return {
+            "status": "error",
+            "task_id": state.get("task_id", ""),
+            "mode": "discovery",
+            "intent": None,
+            "selected_tool": None,
+            "required_inputs": [],
+            "recommended_inputs": [],
+            "optional_inputs": [],
+            "defaults": {},
+            "provided_inputs": {},
+            "missing_inputs": [],
+            "missing_parameters": [],
+            "ready_to_execute": False,
+            "precheck_tool": None,
+            "files": [],
+            "commands": [],
+            "notes": [],
+            "requires_confirmation": False,
+            "steps": [],
+            "error": "Discovery response was not valid JSON.",
+            "explanation": "InfraPilot could not summarize the discovery step.",
+        }
+
+    selected_tool = content.get("selected_tool")
+    spec = CORE_TOOL_INPUT_SPECS.get(selected_tool) if isinstance(selected_tool, str) else None
+
+    required_inputs = _string_list(content.get("required_inputs")) or (
+        list(spec["required_inputs"]) if spec else []
+    )
+    recommended_inputs = _string_list(content.get("recommended_inputs")) or (
+        list(spec["recommended_inputs"]) if spec else []
+    )
+    optional_inputs = _string_list(content.get("optional_inputs")) or (
+        list(spec["optional_inputs"]) if spec else []
+    )
+    defaults = content.get("defaults") if isinstance(content.get("defaults"), dict) else (
+        dict(spec["defaults"]) if spec else {}
+    )
+    provided_inputs = (
+        content.get("provided_inputs") if isinstance(content.get("provided_inputs"), dict) else {}
+    )
+    missing_inputs = _string_list(content.get("missing_inputs"))
+    if not missing_inputs:
+        missing_inputs = [
+            name for name in required_inputs if name not in provided_inputs or provided_inputs[name] in ("", None)
+        ]
+
+    ready_to_execute = bool(content.get("ready_to_execute")) and not missing_inputs
+    intent = content.get("intent") if isinstance(content.get("intent"), str) else (
+        spec["intent"] if spec else None
+    )
+    precheck_tool = content.get("precheck_tool") if isinstance(content.get("precheck_tool"), str) else (
+        spec["precheck_tool"] if spec else None
+    )
+    explanation = (
+        content.get("explanation")
+        if isinstance(content.get("explanation"), str) and content.get("explanation").strip()
+        else _build_discovery_explanation(selected_tool, required_inputs, missing_inputs)
+    )
+
+    status = "success" if ready_to_execute else "needs_input"
+    if selected_tool is None:
+        status = "needs_input"
+
+    return {
+        "status": status,
+        "task_id": state.get("task_id", ""),
+        "mode": "discovery",
+        "intent": intent,
+        "selected_tool": selected_tool,
+        "required_inputs": required_inputs,
+        "recommended_inputs": recommended_inputs,
+        "optional_inputs": optional_inputs,
+        "defaults": defaults,
+        "provided_inputs": provided_inputs,
+        "missing_inputs": missing_inputs,
+        "missing_parameters": missing_inputs,
+        "ready_to_execute": ready_to_execute,
+        "precheck_tool": precheck_tool,
+        "files": [],
+        "commands": [],
+        "notes": [],
+        "requires_confirmation": False,
+        "steps": [],
+        "error": None,
+        "explanation": explanation,
+    }
+
+
+def _message_text(message: BaseMessage) -> str:
+    """Collapse a LangChain message content field to plain text."""
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in content
+        ).strip()
+    return str(content)
+
+
+def _parse_json_object(raw_text: str) -> dict | None:
+    """Parse a raw JSON object, tolerating markdown fences."""
+    stripped = raw_text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.strip("`")
+        if stripped.startswith("json"):
+            stripped = stripped[4:].strip()
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        try:
+            parsed = json.loads(stripped[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _string_list(value: object) -> list[str]:
+    """Normalize a JSON array to a list[str]."""
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str)]
+
+
+def _build_discovery_explanation(
+    selected_tool: str | None,
+    required_inputs: list[str],
+    missing_inputs: list[str],
+) -> str:
+    """Fallback explanation for discovery-mode payloads."""
+    if not selected_tool:
+        return "InfraPilot could not match the request to a supported tool yet."
+    if missing_inputs:
+        return (
+            f"Selected {selected_tool}, but more input is required before execution: "
+            f"{', '.join(missing_inputs)}."
+        )
+    if required_inputs:
+        return f"Selected {selected_tool} and collected all required inputs for execution."
+    return f"Selected {selected_tool}; execution can proceed with defaults."
+
+
+def _strip_thinking_tags(text: str) -> str:
+    """Remove <thinking>...</thinking> blocks from AI output before showing to users."""
+    stripped = re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL)
+    return stripped.strip()
+
+
+_GENERATION_TOOLS = frozenset({
+    "generate_s3_terraform",
+    "generate_ec2_terraform",
+    "generate_vpc_terraform",
+})
 
 
 def _should_use_fallback_explanation(explanation: str, status: str) -> bool:

@@ -10,8 +10,8 @@ from .core_payloads import render_terraform_template, terraform_payload
 @tool
 def generate_ec2_terraform(
     instance_type: str,
-    region: str = "us-east-1",
-    instance_name: str = "infrapilot-ec2",
+    region: str,
+    instance_name: str,
     vpc_cidr: str = "10.50.0.0/16",
     public_subnet_cidr: str = "10.50.1.0/24",
 ) -> dict[str, object]:
